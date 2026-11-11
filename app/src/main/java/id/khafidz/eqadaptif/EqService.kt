@@ -235,15 +235,15 @@ class EqService : Service() {
         val user = Store.userCurve()
         val corr = if (corrOn) Bands.resample(adaptive.C, freqs) else FloatArray(freqs.size)
         val g = FloatArray(freqs.size) { (user[it] + corr[it]).coerceIn(-15f, 15f) }
-        val boost = if (corrOn) (adaptive.C.maxOrNull() ?: 0f).coerceAtLeast(0f) else 0f
-        val toneBoost = maxOf(Store.bass, Store.treble, 0f) * 0.5f
+        val boost = if (corrOn && Store.autoHeadroom) (adaptive.C.maxOrNull() ?: 0f).coerceAtLeast(0f) else 0f
+        val toneBoost = if (Store.autoHeadroom) maxOf(Store.bass, Store.treble, 0f) * 0.5f else 0f
         lastApplied = g
         return FxParams(
             gains = g,
             edges = Bands.edges(freqs),
             preamp = Store.preamp - boost * 0.5f - toneBoost,
             balance = Store.balance,
-            limiterOn = Store.limiterOn,
+            limiterOn = Store.limiterOn || !Store.autoHeadroom, // tanpa pengurangan otomatis, limiter wajib menjaga puncak
             limiterThreshold = Store.limiterThreshold,
             compressor = Store.compressor,
             virtualizer = Store.virtualizer,

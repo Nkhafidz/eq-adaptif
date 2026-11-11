@@ -209,6 +209,8 @@ object Store {
     var limiterOn = true
     var limiterThreshold = -1f
     var compressor = 0       // 0 mati, 1 ringan, 2 sedang, 3 kuat
+    /** true = preamp diturunkan otomatis agar tidak pecah (volume lebih kecil). false = volume penuh, limiter menjaga puncak. */
+    var autoHeadroom = false
 
     // AI Auto-seimbang
     var adaptiveOn = false
@@ -251,6 +253,12 @@ object Store {
         limiterOn = p.getBoolean("limiterOn", true)
         limiterThreshold = p.getFloat("limiterThreshold", -1f)
         compressor = p.getInt("compressor", 0)
+        if (!p.contains("autoHeadroom")) {
+            // pembaruan dari versi lama: kembalikan volume penuh
+            preamp = 0f
+            limiterOn = true
+        }
+        autoHeadroom = p.getBoolean("autoHeadroom", false)
 
         adaptiveOn = p.getBoolean("adaptiveOn", false)
         strength = p.getInt("strength", 60)
@@ -291,6 +299,7 @@ object Store {
             ?.putBoolean("limiterOn", limiterOn)
             ?.putFloat("limiterThreshold", limiterThreshold)
             ?.putInt("compressor", compressor)
+            ?.putBoolean("autoHeadroom", autoHeadroom)
             ?.putBoolean("adaptiveOn", adaptiveOn)
             ?.putInt("strength", strength)
             ?.putInt("limit", limit)
@@ -317,9 +326,11 @@ object Store {
         val g = Presets.lookup(name) ?: return false
         if (Presets.isAutoEq(name) && bandMode != 31) bandMode = 31
         gains = Bands.resample(g, Bands.FREQS)
-        val peak = (gains.maxOrNull() ?: 0f).coerceAtLeast(0f)
-        val factor = if (Presets.isAutoEq(name)) 1f else 0.6f
-        preamp = -((peak * factor * 2).roundToInt() / 2f)
+        preamp = if (autoHeadroom) {
+            val peak = (gains.maxOrNull() ?: 0f).coerceAtLeast(0f)
+            val factor = if (Presets.isAutoEq(name)) 1f else 0.6f
+            -((peak * factor * 2).roundToInt() / 2f)
+        } else 0f
         presetName = name
         save()
         return true

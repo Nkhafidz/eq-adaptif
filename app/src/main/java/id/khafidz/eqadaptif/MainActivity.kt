@@ -93,6 +93,7 @@ class MainActivity : Activity() {
     private lateinit var tvVirt: TextView
     private lateinit var btnReverb: Button
     private lateinit var swLimiter: Switch
+    private lateinit var swHeadroom: Switch
     private lateinit var sbLimTh: SeekBar
     private lateinit var tvLimTh: TextView
     // Perangkat
@@ -358,7 +359,7 @@ class MainActivity : Activity() {
         knobPre.onChange = { v -> Store.preamp = v; EqService.instance?.forceApply(); commitLater() }
         for (k in listOf(knobBass, knobTreble, knobPre)) knobs.addView(k, LinearLayout.LayoutParams(0, wrap, 1f))
         tone.addView(knobs)
-        tone.addView(tv("Putar dengan menggeser jari ke atas/bawah. Ketuk dua kali untuk kembali ke 0.", 11.5f, cMuted))
+        tone.addView(tv("Putar dengan menggeser jari ke atas/bawah. Ketuk dua kali untuk kembali ke 0. Suara kurang keras? Naikkan PREAMP.", 11.5f, cMuted))
 
         // ===== AI Auto-seimbang =====
         val ai = card(root, null, accent = true)
@@ -464,6 +465,15 @@ class MainActivity : Activity() {
         cRow.addView(btnComp)
         fxc.addView(cRow)
         fxc.addView(tv("Menyamakan volume bagian pelan dan keras, juga antar lagu.", 11.5f, cMuted))
+        gap(fxc, 10)
+        swHeadroom = sw("Turunkan volume otomatis saat EQ dinaikkan") { on ->
+            Store.autoHeadroom = on
+            if (!on) Store.preamp = 0f
+            commit(); refreshAll()
+            toast(if (on) "Volume diturunkan otomatis untuk mencegah distorsi" else "Volume penuh, limiter menjaga agar tidak pecah")
+        }
+        fxc.addView(swHeadroom)
+        fxc.addView(tv("Mati (disarankan) = volume tetap penuh; limiter menahan puncak suara supaya tidak pecah. Nyalakan hanya jika masih terdengar pecah/kresek.", 11.5f, cMuted))
         gap(fxc, 10)
         swLimiter = sw("Limiter (cegah suara pecah)") { on -> Store.limiterOn = on; commit(); refreshLabels() }
         fxc.addView(swLimiter)
@@ -737,6 +747,7 @@ class MainActivity : Activity() {
         swGlobal.isChecked = Store.legacy
         swAutoDevice.isChecked = Store.autoDevice
         swLimiter.isChecked = Store.limiterOn
+        swHeadroom.isChecked = Store.autoHeadroom
         sbStrength.progress = Store.strength
         sbLimit.progress = Store.limit - 2
         sbBalance.progress = Store.balance + 100
@@ -768,8 +779,9 @@ class MainActivity : Activity() {
             b.background = if (on) rounded(cAccent, cAccent, 9) else rounded(cPanel2, cLine, 9)
             b.setTextColor(if (on) 0xFF1A1205.toInt() else cText)
         }
-        tvLimTh.text = "Ambang limiter: ${sgn(Store.limiterThreshold)} dB"
-        sbLimTh.isEnabled = Store.limiterOn
+        tvLimTh.text = "Ambang limiter: ${sgn(Store.limiterThreshold)} dB" +
+            if (!Store.autoHeadroom && !Store.limiterOn) " (tetap aktif selama volume penuh)" else ""
+        sbLimTh.isEnabled = Store.limiterOn || !Store.autoHeadroom
         for ((o, b) in deviceButtons) b.text = Store.devicePresets[o]?.removePrefix(Presets.AUTOEQ_PREFIX)?.let { if (it.length > 22) it.take(21) + "…" else it } ?: "Pilih preset"
     }
 
