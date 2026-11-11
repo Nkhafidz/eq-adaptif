@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.media.audiofx.AudioEffect
-import android.service.notification.NotificationListenerService
 
 /**
  * Aplikasi musik (YouTube Music, Spotify, dll) mengumumkan sesi audionya lewat broadcast ini.
@@ -22,6 +21,3 @@ class SessionReceiver : BroadcastReceiver() {
         }
     }
 }
-
-/** Kosong: hanya dibutuhkan agar sistem mengizinkan membaca judul lagu yang sedang diputar. */
-class MediaListenerService : NotificationListenerService()

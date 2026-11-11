@@ -2,8 +2,6 @@ package id.khafidz.eqadaptif
 
 import android.Manifest
 import android.app.Activity
-import android.app.NotificationManager
-import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -61,7 +59,6 @@ class MainActivity : Activity() {
     private lateinit var tvTarget: TextView
     private lateinit var btnLock: Button
     private lateinit var swLegacy: Switch
-    private lateinit var tvNotif: TextView
     private lateinit var sbPre: SeekBar
     private lateinit var tvPre: TextView
     private val gainBars = arrayOfNulls<SeekBar>(10)
@@ -94,7 +91,6 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         AppState.addListener(listener)
-        EqService.instance?.refreshMediaWatch()
         refreshAll()
     }
 
@@ -353,12 +349,6 @@ class MainActivity : Activity() {
         val adv = card(root)
         adv.addView(tv("Pengaturan lanjutan", 15f, cText, true))
         gap(adv, 6)
-        tvNotif = tv("", 12.5f, cMuted)
-        adv.addView(tvNotif)
-        adv.addView(btn("Izinkan deteksi ganti lagu") {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-        }, LinearLayout.LayoutParams(wrap, wrap).apply { topMargin = dp(6) })
-        gap(adv, 12)
         swLegacy = sw("Mode legacy (global)") { on ->
             Store.legacy = on; Store.save()
             toast(if (on) "Mode legacy menyala" else "Mode legacy mati")
@@ -447,10 +437,6 @@ class MainActivity : Activity() {
         tvTarget.text = "Target: " + if (Store.target != null) "dikunci dari \"${Store.targetName ?: "lagu referensi"}\"" else "Netral (bawaan)"
         tvPre.text = sgn(Store.preamp)
         for (i in 0 until 10) gainVals[i]?.text = sgn(Store.gains[i])
-        val nm = getSystemService(NotificationManager::class.java)
-        val granted = nm.isNotificationListenerAccessGranted(ComponentName(this, MediaListenerService::class.java))
-        tvNotif.text = if (granted) "Deteksi ganti lagu: aktif ✓ (analisis diulang setiap lagu berganti)"
-        else "Deteksi ganti lagu: belum diizinkan. Tanpa ini analisis tetap berjalan, hanya sedikit lebih lambat menyesuaikan saat lagu berganti."
     }
 
     private fun avg(a: FloatArray, i: Int, j: Int): Float {

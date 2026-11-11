@@ -6,19 +6,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.media.MediaMetadata
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Visualizer
-import android.media.session.MediaController
-import android.media.session.MediaSessionManager
-import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -59,10 +54,7 @@ class EqService : Service() {
     private var legacyFailed = false
 
     private val receiver = SessionReceiver()
-    private var msm: MediaSessionManager? = null
-    private var sessionsListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
-    private val controllers = mutableListOf<Pair<MediaController, MediaController.Callback>>()
-    private var currentTitle: String? = null
+    private val currentTitle: String? = null
 
     private val tick = object : Runnable {
         override fun run() {
@@ -81,7 +73,6 @@ class EqService : Service() {
         registerSessionReceiver()
         Sessions.open.keys.toList().forEach { attach(it) }
         startVisualizer()
-        refreshMediaWatch()
         handler.post(tick)
     }
 
@@ -96,7 +87,6 @@ class EqService : Service() {
         effects.clear()
         try { viz?.setEnabled(false); viz?.release() } catch (_: Exception) {}
         viz = null
-        clearMediaWatch()
         instance = null
         AppState.sessions = emptyList()
         AppState.frames = 0
@@ -232,7 +222,7 @@ class EqService : Service() {
     private fun startVisualizer() {
         if (viz != null) return
         if (!hasMic()) {
-            AppState.vizError = "Izin \"Mikrofon/Rekam audio\" belum diberikan, jadi Auto-seimbang tidak bisa menganalisis musik. EQ manual tetap jalan."
+            AppState.vizError = "Izin "Rekam audio" belum diberikan, jadi Auto-seimbang tidak bisa menganalisis musik. EQ manual tetap jalan."
             return
         }
         try {
@@ -289,57 +279,5 @@ class EqService : Service() {
         Store.targetName = currentTitle ?: "lagu yang sedang diputar"
         Store.save()
         return true
-    }
-
-    // ---------------- Deteksi ganti lagu (opsional) ----------------
-
-    private fun hasNotifAccess(): Boolean {
-        val nm = getSystemService(NotificationManager::class.java)
-        return nm.isNotificationListenerAccessGranted(ComponentName(this, MediaListenerService::class.java))
-    }
-
-    fun refreshMediaWatch() {
-        if (sessionsListener != null || !hasNotifAccess()) return
-        try {
-            val m = getSystemService(MediaSessionManager::class.java)
-            val cn = ComponentName(this, MediaListenerService::class.java)
-            val l = MediaSessionManager.OnActiveSessionsChangedListener { list -> bindControllers(list) }
-            m.addOnActiveSessionsChangedListener(l, cn)
-            msm = m
-            sessionsListener = l
-            bindControllers(m.getActiveSessions(cn))
-        } catch (_: Exception) {}
-    }
-
-    private fun clearMediaWatch() {
-        controllers.forEach { (c, cb) -> try { c.unregisterCallback(cb) } catch (_: Exception) {} }
-        controllers.clear()
-        sessionsListener?.let { l -> try { msm?.removeOnActiveSessionsChangedListener(l) } catch (_: Exception) {} }
-        sessionsListener = null
-    }
-
-    private fun bindControllers(list: List<MediaController>?) {
-        controllers.forEach { (c, cb) -> try { c.unregisterCallback(cb) } catch (_: Exception) {} }
-        controllers.clear()
-        list?.forEach { c ->
-            val cb = object : MediaController.Callback() {
-                override fun onMetadataChanged(metadata: MediaMetadata?) {
-                    onTrack(metadata)
-                }
-            }
-            c.registerCallback(cb, handler)
-            controllers.add(c to cb)
-            if (c.playbackState?.state == PlaybackState.STATE_PLAYING) onTrack(c.metadata)
-        }
-    }
-
-    private fun onTrack(m: MediaMetadata?) {
-        val t = m?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: return
-        val a = m.getString(MediaMetadata.METADATA_KEY_ARTIST)
-        val full = if (a.isNullOrBlank()) t else "$t — $a"
-        if (full != currentTitle) {
-            currentTitle = full
-            adaptive.reset() // lagu baru: analisis ulang dari nol
-        }
     }
 }

@@ -6,7 +6,7 @@ Equalizer 10 band untuk Android (9 ke atas) yang bekerja di **YouTube Music**, S
 
 - **EQ**: aplikasi musik mengumumkan "sesi audio"-nya ke sistem. EQ Adaptif memasang efek `DynamicsProcessing` (EQ 10 band + limiter) ke sesi itu. Cara ini sama dengan yang dipakai Wavelet.
 - **Auto-seimbang**: `Visualizer` membaca spektrum musik yang sedang diputar. Aplikasi menghitung keseimbangan bass, mid, dan treble rata-rata selama ±10 detik terakhir, membandingkannya dengan target, lalu menambahkan koreksi kecil per band (dibatasi ±dB, berubah perlahan). Preset Anda tetap berlaku di atasnya.
-- **Deteksi ganti lagu** (opsional, lewat izin akses notifikasi): saat judul lagu berganti, analisis diulang dari nol supaya penyesuaian lebih cepat.
+- Analisis memakai rata-rata bergeser ±10 detik, jadi koreksi ikut menyesuaikan sendiri saat lagu berganti.
 
 ## Build APK
 
