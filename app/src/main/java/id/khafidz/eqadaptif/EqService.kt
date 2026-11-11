@@ -245,7 +245,7 @@ class EqService : Service() {
         return FxParams(
             gains = g,
             edges = Bands.edges(freqs),
-            preamp = Store.preamp - boost * 0.5f - toneBoost,
+            preamp = Store.preamp + Store.dpComp - boost * 0.5f - toneBoost,
             balance = Store.balance,
             limiterOn = Store.limiterOn || !Store.autoHeadroom, // tanpa pengurangan otomatis, limiter wajib menjaga puncak
             limiterThreshold = Store.limiterThreshold,
@@ -429,6 +429,7 @@ class EqService : Service() {
 
         adaptive.update(Store.target ?: Adaptive.DEFAULT_TARGET, Store.strength, Store.limit)
         rebuildIfBandModeChanged()
+        if (calibrating) { AppState.changed(); return }
         val p = currentParams()
         fx.values.forEach { it.apply(p) }
         if (Store.presetName != lastNotifPreset) updateNotification()
@@ -437,6 +438,73 @@ class EqService : Service() {
         AppState.frames = adaptive.frames
         AppState.changed()
     }
+
+    // ---------------- Kalibrasi volume ----------------
+
+    var calibrating = false
+        private set
+
+    /**
+     * Mengukur selisih volume antara pemrosesan aktif (EQ datar) dan dimatikan, bergantian beberapa kali
+     * supaya perubahan keras-pelan lagu tidak mengacaukan hasil. Hasil (dB) disimpan sebagai kompensasi.
+     * done(null) = gagal mengukur (tidak ada musik / pengukuran tidak didukung).
+     */
+    fun calibrate(done: (Float?) -> Unit) {
+        val v = viz
+        if (v == null || fx.isEmpty() || calibrating) { done(null); return }
+        try { v.setMeasurementMode(Visualizer.MEASUREMENT_MODE_PEAK_RMS) } catch (_: Exception) { done(null); return }
+        calibrating = true
+        val flat = FxParams(
+            gains = FloatArray(Bands.N), edges = Bands.edges(Bands.FREQS), preamp = 0f, balance = 0,
+            limiterOn = Store.limiterOn || !Store.autoHeadroom, limiterThreshold = Store.limiterThreshold,
+            compressor = 0, virtualizer = 0, reverb = 0, loudBoost = 0f
+        )
+        fx.values.forEach { it.apply(flat, true) }
+        val onDb = ArrayList<Double>()
+        val offDb = ArrayList<Double>()
+        val m = Visualizer.MeasurementPeakRms()
+        val phaseMs = 600L
+        val phases = 12
+        val start = android.os.SystemClock.uptimeMillis()
+        val sampler = object : Runnable {
+            override fun run() {
+                val t = android.os.SystemClock.uptimeMillis() - start
+                val phase = (t / phaseMs).toInt()
+                if (phase >= phases) {
+                    finishCalibration(onDb, offDb, done)
+                    return
+                }
+                val off = phase % 2 == 1
+                if (bypass != off) bypass = off
+                if (t % phaseMs > 300) {
+                    try {
+                        v.getMeasurementPeakRms(m)
+                        if (m.mRms > -6000) (if (off) offDb else onDb).add(m.mRms / 100.0)
+                    } catch (_: Exception) {}
+                }
+                handler.postDelayed(this, 50)
+            }
+        }
+        handler.post(sampler)
+    }
+
+    private fun finishCalibration(onDb: List<Double>, offDb: List<Double>, done: (Float?) -> Unit) {
+        bypass = false
+        calibrating = false
+        try { viz?.setMeasurementMode(Visualizer.MEASUREMENT_MODE_NONE) } catch (_: Exception) {}
+        fun powAvg(l: List<Double>): Double = 10 * kotlin.math.log10(l.map { 10.0.pow(it / 10) }.average())
+        if (onDb.size < 15 || offDb.size < 15) { forceApply(); done(null); return }
+        val diff = (powAvg(offDb) - powAvg(onDb)).toFloat()
+        val comp = ((diff * 2).roundToIntSafe() / 2f).coerceIn(0f, 12f)
+        Store.dpComp = comp
+        Store.save()
+        lastApplied = null
+        fx.values.forEach { it.apply(currentParams(), true) }
+        AppState.changed()
+        done(diff)
+    }
+
+    private fun Float.roundToIntSafe(): Int = if (isNaN()) 0 else kotlin.math.round(this).toInt()
 
     /** Kunci karakter suara lagu yang sedang diputar sebagai target AI. */
     fun lockTarget(): Boolean {

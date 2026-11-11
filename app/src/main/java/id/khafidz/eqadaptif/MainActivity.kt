@@ -74,6 +74,8 @@ class MainActivity : Activity() {
     private lateinit var knobTreble: KnobView
     private lateinit var knobPre: KnobView
     private lateinit var knobLoud: KnobView
+    private lateinit var tvComp: TextView
+    private lateinit var btnCalib: Button
     // AI
     private lateinit var swAdaptive: Switch
     private lateinit var tvStatus: TextView
@@ -363,6 +365,12 @@ class MainActivity : Activity() {
         knobLoud.onChange = { v -> Store.loudBoost = v; EqService.instance?.forceApply(); commitLater() }
         for (k in listOf(knobBass, knobTreble, knobPre, knobLoud)) knobs.addView(k, LinearLayout.LayoutParams(0, wrap, 1f))
         tone.addView(knobs)
+        val calRow = hrow()
+        tvComp = tv("", 12.5f, cMuted)
+        calRow.addView(tvComp, LinearLayout.LayoutParams(0, wrap, 1f))
+        btnCalib = btn("🎚 Samakan volume otomatis") { runCalibration() }
+        calRow.addView(btnCalib)
+        tone.addView(calRow, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(6); bottomMargin = dp(6) })
         tone.addView(tv("Putar dengan menggeser jari ke atas/bawah. Ketuk dua kali untuk kembali ke 0. VOLUME+ menguatkan suara tanpa membuatnya pecah. Kalau volume turun saat EQ menyala, naikkan VOLUME+ sekitar +3 dB.", 11.5f, cMuted))
 
         // ===== AI Auto-seimbang =====
@@ -716,6 +724,25 @@ class MainActivity : Activity() {
         dlg.show()
     }
 
+    private fun runCalibration() {
+        val svc = EqService.instance
+        if (svc == null) { toast("Nyalakan Equalizer dulu"); return }
+        if (AppState.frames < Adaptive.READY) { toast("Putar lagu dulu (yang volumenya stabil), lalu coba lagi"); return }
+        btnCalib.isEnabled = false
+        btnCalib.text = "Mengukur… (±7 detik)"
+        toast("Volume akan naik-turun sebentar, itu normal")
+        svc.calibrate { diff ->
+            btnCalib.isEnabled = true
+            btnCalib.text = "🎚 Samakan volume otomatis"
+            refreshLabels()
+            when {
+                diff == null -> toast("Gagal mengukur. Pastikan lagu sedang diputar, lalu coba lagi.")
+                diff < 0.3f -> toast("Tidak ada penurunan volume yang terukur")
+                else -> toast("Selesai: volume dikompensasi +${String.format("%.1f", Store.dpComp)} dB")
+            }
+        }
+    }
+
     private fun setBands(mode: Int) {
         if (Store.bandMode == mode) return
         Store.changeBandMode(mode)
@@ -782,6 +809,7 @@ class MainActivity : Activity() {
     }
 
     private fun refreshLabels() {
+        tvComp.text = if (Store.dpComp > 0f) "Kompensasi volume: +${String.format("%.1f", Store.dpComp)} dB" else "Volume turun saat EQ aktif?"
         tvStrength.text = "Kekuatan koreksi: ${Store.strength}%"
         tvLimit.text = "Batas koreksi per band: ±${Store.limit} dB"
         tvTarget.text = "Target: " + if (Store.target != null) "dikunci dari ${Store.targetName ?: "lagu referensi"}" else "Netral (bawaan)"

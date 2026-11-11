@@ -213,6 +213,8 @@ object Store {
     var autoHeadroom = false
     /** Penguat volume (LoudnessEnhancer), dalam dB 0..12. */
     var loudBoost = 0f
+    /** Kompensasi hasil kalibrasi: mengimbangi penurunan level dari mesin efek HP (dB). */
+    var dpComp = 0f
 
     // AI Auto-seimbang
     var adaptiveOn = false
@@ -262,6 +264,7 @@ object Store {
         }
         autoHeadroom = p.getBoolean("autoHeadroom", false)
         loudBoost = p.getFloat("loudBoost", 0f)
+        dpComp = p.getFloat("dpComp", 0f)
         if (!p.contains("limiterV2")) {
             // limiter lebih lunak: hanya menahan puncak yang benar-benar melewati batas
             limiterThreshold = -0.2f
@@ -308,6 +311,7 @@ object Store {
             ?.putInt("compressor", compressor)
             ?.putBoolean("autoHeadroom", autoHeadroom)
             ?.putFloat("loudBoost", loudBoost)
+            ?.putFloat("dpComp", dpComp)
             ?.putBoolean("limiterV2", true)
             ?.putBoolean("adaptiveOn", adaptiveOn)
             ?.putInt("strength", strength)
