@@ -222,7 +222,7 @@ class EqService : Service() {
     private fun startVisualizer() {
         if (viz != null) return
         if (!hasMic()) {
-            AppState.vizError = "Izin "Rekam audio" belum diberikan, jadi Auto-seimbang tidak bisa menganalisis musik. EQ manual tetap jalan."
+            AppState.vizError = "Izin \"Rekam audio\" belum diberikan, jadi Auto-seimbang tidak bisa menganalisis musik. EQ manual tetap jalan."
             return
         }
         try {
