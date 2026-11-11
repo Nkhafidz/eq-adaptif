@@ -303,7 +303,7 @@ object Store {
     }
 
     /** Ganti jumlah band (10 / 31); kurva saat ini ikut dikonversi. */
-    fun setBandMode(mode: Int) {
+    fun changeBandMode(mode: Int) {
         val m = if (mode == 31) 31 else 10
         if (m == bandMode) return
         val old = gains

@@ -690,7 +690,7 @@ class MainActivity : Activity() {
 
     private fun setBands(mode: Int) {
         if (Store.bandMode == mode) return
-        Store.setBandMode(mode)
+        Store.changeBandMode(mode)
         commit(); refreshAll()
         toast("$mode band")
     }
