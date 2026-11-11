@@ -1,6 +1,7 @@
 package id.khafidz.eqadaptif
 
 import android.media.audiofx.DynamicsProcessing
+import android.media.audiofx.LoudnessEnhancer
 import android.media.audiofx.PresetReverb
 import android.media.audiofx.Virtualizer
 import kotlin.math.abs
@@ -16,7 +17,8 @@ class FxParams(
     val limiterThreshold: Float,
     val compressor: Int,
     val virtualizer: Int,
-    val reverb: Int
+    val reverb: Int,
+    val loudBoost: Float
 )
 
 /**
@@ -29,6 +31,8 @@ class SessionFx(val sid: Int, val bandCount: Int) {
     private val dp: DynamicsProcessing
     private var virt: Virtualizer? = null
     private var rev: PresetReverb? = null
+    private var loud: LoudnessEnhancer? = null
+    private var loudFailed = false
     private var last: FxParams? = null
 
     init {
@@ -56,15 +60,19 @@ class SessionFx(val sid: Int, val bandCount: Int) {
             }
         }
         // Preamp + balance
-        if (force || l == null || abs(p.preamp - l.preamp) > 0.05f || p.balance != l.balance) {
+        if (force || l == null || abs(p.loudBoost - l.loudBoost) > 0.05f) applyLoudness(p.loudBoost)
+        if (force || l == null || abs(p.preamp - l.preamp) > 0.05f || p.balance != l.balance ||
+            abs(p.loudBoost - l.loudBoost) > 0.05f) {
             val b = p.balance / 100f
             val left = if (b > 0) 20f * log10((1f - b).coerceAtLeast(0.01f)) else 0f
             val right = if (b < 0) 20f * log10((1f + b).coerceAtLeast(0.01f)) else 0f
+            // Jika LoudnessEnhancer tidak tersedia di HP ini, penguat dipindah ke preamp (limiter menjaga puncak).
+            val pre = p.preamp + if (loudFailed) p.loudBoost else 0f
             try {
-                dp.setInputGainbyChannel(0, p.preamp + left)
-                dp.setInputGainbyChannel(1, p.preamp + right)
+                dp.setInputGainbyChannel(0, pre + left)
+                dp.setInputGainbyChannel(1, pre + right)
             } catch (_: Exception) {
-                try { dp.setInputGainAllChannelsTo(p.preamp) } catch (_: Exception) {}
+                try { dp.setInputGainAllChannelsTo(pre) } catch (_: Exception) {}
             }
         }
         // Compressor
@@ -104,6 +112,21 @@ class SessionFx(val sid: Int, val bandCount: Int) {
         } catch (_: Exception) {}
     }
 
+    private fun applyLoudness(db: Float) {
+        if (loudFailed) return
+        try {
+            if (db <= 0.05f) {
+                loud?.setEnabled(false)
+                return
+            }
+            val le = loud ?: LoudnessEnhancer(sid).also { loud = it }
+            le.setTargetGain((db * 100).toInt())
+            le.setEnabled(true)
+        } catch (_: Exception) {
+            loudFailed = true
+        }
+    }
+
     private fun applyVirtualizer(strength: Int) {
         try {
             if (strength <= 0) {
@@ -132,5 +155,6 @@ class SessionFx(val sid: Int, val bandCount: Int) {
         try { dp.setEnabled(false); dp.release() } catch (_: Exception) {}
         try { virt?.release() } catch (_: Exception) {}
         try { rev?.release() } catch (_: Exception) {}
+        try { loud?.release() } catch (_: Exception) {}
     }
 }

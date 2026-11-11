@@ -207,10 +207,12 @@ object Store {
     var virtualizer = 0      // 0..1000
     var reverb = 0           // 0 = mati, 1..6 PresetReverb
     var limiterOn = true
-    var limiterThreshold = -1f
+    var limiterThreshold = -0.2f
     var compressor = 0       // 0 mati, 1 ringan, 2 sedang, 3 kuat
     /** true = preamp diturunkan otomatis agar tidak pecah (volume lebih kecil). false = volume penuh, limiter menjaga puncak. */
     var autoHeadroom = false
+    /** Penguat volume (LoudnessEnhancer), dalam dB 0..12. */
+    var loudBoost = 0f
 
     // AI Auto-seimbang
     var adaptiveOn = false
@@ -251,7 +253,7 @@ object Store {
         virtualizer = p.getInt("virtualizer", 0)
         reverb = p.getInt("reverb", 0)
         limiterOn = p.getBoolean("limiterOn", true)
-        limiterThreshold = p.getFloat("limiterThreshold", -1f)
+        limiterThreshold = p.getFloat("limiterThreshold", -0.2f)
         compressor = p.getInt("compressor", 0)
         if (!p.contains("autoHeadroom")) {
             // pembaruan dari versi lama: kembalikan volume penuh
@@ -259,6 +261,11 @@ object Store {
             limiterOn = true
         }
         autoHeadroom = p.getBoolean("autoHeadroom", false)
+        loudBoost = p.getFloat("loudBoost", 0f)
+        if (!p.contains("limiterV2")) {
+            // limiter lebih lunak: hanya menahan puncak yang benar-benar melewati batas
+            limiterThreshold = -0.2f
+        }
 
         adaptiveOn = p.getBoolean("adaptiveOn", false)
         strength = p.getInt("strength", 60)
@@ -300,6 +307,8 @@ object Store {
             ?.putFloat("limiterThreshold", limiterThreshold)
             ?.putInt("compressor", compressor)
             ?.putBoolean("autoHeadroom", autoHeadroom)
+            ?.putFloat("loudBoost", loudBoost)
+            ?.putBoolean("limiterV2", true)
             ?.putBoolean("adaptiveOn", adaptiveOn)
             ?.putInt("strength", strength)
             ?.putInt("limit", limit)

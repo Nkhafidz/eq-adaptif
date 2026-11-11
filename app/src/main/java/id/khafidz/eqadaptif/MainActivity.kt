@@ -73,6 +73,7 @@ class MainActivity : Activity() {
     private lateinit var knobBass: KnobView
     private lateinit var knobTreble: KnobView
     private lateinit var knobPre: KnobView
+    private lateinit var knobLoud: KnobView
     // AI
     private lateinit var swAdaptive: Switch
     private lateinit var tvStatus: TextView
@@ -357,9 +358,11 @@ class MainActivity : Activity() {
         knobBass.onChange = { v -> Store.bass = v; EqService.instance?.forceApply(); updateCurve(); commitLater() }
         knobTreble.onChange = { v -> Store.treble = v; EqService.instance?.forceApply(); updateCurve(); commitLater() }
         knobPre.onChange = { v -> Store.preamp = v; EqService.instance?.forceApply(); commitLater() }
-        for (k in listOf(knobBass, knobTreble, knobPre)) knobs.addView(k, LinearLayout.LayoutParams(0, wrap, 1f))
+        knobLoud = KnobView(this, "VOLUME+", 0f, 12f, cViolet)
+        knobLoud.onChange = { v -> Store.loudBoost = v; EqService.instance?.forceApply(); commitLater() }
+        for (k in listOf(knobBass, knobTreble, knobPre, knobLoud)) knobs.addView(k, LinearLayout.LayoutParams(0, wrap, 1f))
         tone.addView(knobs)
-        tone.addView(tv("Putar dengan menggeser jari ke atas/bawah. Ketuk dua kali untuk kembali ke 0. Suara kurang keras? Naikkan PREAMP.", 11.5f, cMuted))
+        tone.addView(tv("Putar dengan menggeser jari ke atas/bawah. Ketuk dua kali untuk kembali ke 0. VOLUME+ menguatkan suara tanpa membuatnya pecah. Kalau volume turun saat EQ menyala, naikkan VOLUME+ sekitar +3 dB.", 11.5f, cMuted))
 
         // ===== AI Auto-seimbang =====
         val ai = card(root, null, accent = true)
@@ -756,6 +759,7 @@ class MainActivity : Activity() {
         knobBass.value = Store.bass
         knobTreble.value = Store.treble
         knobPre.value = Store.preamp
+        knobLoud.value = Store.loudBoost
         suppress = false
         renderPresets()
         refreshLabels()

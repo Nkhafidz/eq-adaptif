@@ -247,7 +247,8 @@ class EqService : Service() {
             limiterThreshold = Store.limiterThreshold,
             compressor = Store.compressor,
             virtualizer = Store.virtualizer,
-            reverb = Store.reverb
+            reverb = Store.reverb,
+            loudBoost = Store.loudBoost
         )
     }
 
