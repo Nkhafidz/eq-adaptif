@@ -17,7 +17,11 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ArrayAdapter
 import android.widget.EditText
+import android.widget.ListView
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -33,6 +37,9 @@ class MainActivity : Activity() {
 
     companion object {
         const val ACTION_AUTOSTART = "id.khafidz.eqadaptif.AUTOSTART"
+        const val REQ_EXPORT = 41
+        const val REQ_IMPORT = 42
+        val COMPRESSORS = arrayOf("Mati", "Ringan", "Sedang", "Kuat")
         val REVERBS = arrayOf("Mati", "Ruang kecil", "Ruang sedang", "Ruang besar", "Aula sedang", "Aula besar", "Plate")
     }
 
@@ -59,6 +66,9 @@ class MainActivity : Activity() {
     private lateinit var curve: EqCurveView
     private lateinit var presetRow: LinearLayout
     private lateinit var btnDelete: Button
+    private lateinit var btnB10: Button
+    private lateinit var btnB31: Button
+    private lateinit var btnComp: Button
     private val presetButtons = LinkedHashMap<String, Button>()
     private lateinit var knobBass: KnobView
     private lateinit var knobTreble: KnobView
@@ -292,9 +302,18 @@ class MainActivity : Activity() {
             updateCurve()
         }
         curve.onBandRelease = { commit() }
+        val bRow = hrow()
+        bRow.addView(tv("Jumlah band", 13f, cMuted), LinearLayout.LayoutParams(0, wrap, 1f))
+        btnB10 = btn("10 band") { setBands(10) }
+        btnB31 = btn("31 band") { setBands(31) }
+        bRow.addView(btnB10)
+        bRow.addView(btnB31, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(6) })
+        eq.addView(bRow, LinearLayout.LayoutParams(match, wrap).apply { bottomMargin = dp(8) })
         eq.addView(curve, LinearLayout.LayoutParams(match, dp(230)))
         eq.addView(tv("Geser titik ke atas/bawah. Garis ungu putus-putus = koreksi AI.", 11.5f, cMuted))
         gap(eq, 8)
+        eq.addView(btn("🔍 Cari preset & headset (6.000+ AutoEq)") { searchDialog(null) },
+            LinearLayout.LayoutParams(match, wrap).apply { bottomMargin = dp(8) })
         presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         eq.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
@@ -308,6 +327,25 @@ class MainActivity : Activity() {
             Store.applyPreset("Flat"); Store.bass = 0f; Store.treble = 0f; commit(); refreshAll()
         }, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(8) })
         eq.addView(pAct, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
+        val ioRow = hrow()
+        ioRow.addView(btn("⬆ Ekspor preset") {
+            try {
+                startActivityForResult(
+                    Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("application/json").putExtra(Intent.EXTRA_TITLE, "eq-adaptif-preset.json"),
+                    REQ_EXPORT
+                )
+            } catch (_: Exception) { toast("Pengelola file tidak tersedia") }
+        })
+        ioRow.addView(btn("⬇ Impor preset") {
+            try {
+                startActivityForResult(
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),
+                    REQ_IMPORT
+                )
+            } catch (_: Exception) { toast("Pengelola file tidak tersedia") }
+        }, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(8) })
+        eq.addView(ioRow, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
 
         // ===== Nada (kenop) =====
         val tone = card(root, "Nada")
@@ -413,6 +451,20 @@ class MainActivity : Activity() {
         rRow.addView(btnReverb)
         fxc.addView(rRow)
         gap(fxc, 10)
+        val cRow = hrow()
+        cRow.addView(tv("Compressor", 14f, cText), LinearLayout.LayoutParams(0, wrap, 1f))
+        btnComp = btn("") {
+            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Compressor")
+                .setSingleChoiceItems(COMPRESSORS, Store.compressor) { dlg, which ->
+                    Store.compressor = which; commit(); refreshLabels(); dlg.dismiss()
+                }
+                .show()
+        }
+        cRow.addView(btnComp)
+        fxc.addView(cRow)
+        fxc.addView(tv("Menyamakan volume bagian pelan dan keras, juga antar lagu.", 11.5f, cMuted))
+        gap(fxc, 10)
         swLimiter = sw("Limiter (cegah suara pecah)") { on -> Store.limiterOn = on; commit(); refreshLabels() }
         fxc.addView(swLimiter)
         tvLimTh = tv("", 13f, cMuted)
@@ -455,12 +507,15 @@ class MainActivity : Activity() {
             11.5f, cMuted
         ))
 
+        gap(adv, 8)
+        adv.addView(tv("Data preset headset: AutoEq oleh Jaakko Pasanen (github.com/jaakkopasanen/AutoEq), lisensi MIT.", 10.5f, cMuted))
+
         // ===== Cara pakai =====
         val help = card(root, "Cara pakai")
         help.addView(tv(
             "1. Nyalakan \"Equalizer aktif\", izinkan rekam audio & notifikasi.\n" +
             "2. Putar musik di YouTube Music. Mode global membuat EQ langsung bekerja.\n" +
-            "3. Pilih preset atau geser titik di grafik, atur Bass/Treble.\n" +
+            "3. Pilih preset, atau tekan \"Cari\" dan ketik nama headset/TWS Anda untuk koreksi AutoEq. Geser titik di grafik dan atur Bass/Treble sesuai selera.\n" +
             "4. AI: putar lagu yang suaranya sudah pas, tunggu analisis penuh (±10 detik), tekan \"Kunci karakter lagu ini\", lalu nyalakan AI Auto-seimbang.\n\n" +
             "Izin \"rekam audio\" hanya dipakai untuk membaca spektrum musik yang sedang diputar, bukan merekam suara Anda.",
             12.5f, cMuted
@@ -481,7 +536,9 @@ class MainActivity : Activity() {
     private fun renderPresets() {
         presetRow.removeAllViews()
         presetButtons.clear()
-        for (name in Presets.all().keys) {
+        val names = Presets.quick().keys.toMutableList()
+        Store.presetName?.let { if (Presets.isAutoEq(it)) names.add(0, it) }
+        for (name in names) {
             val b = btn(if (Presets.isCustom(name)) "★ $name" else name) {
                 Store.applyPreset(name); commit(); refreshAll()
             }
@@ -514,7 +571,7 @@ class MainActivity : Activity() {
             .setView(box)
             .setPositiveButton("Simpan") { _, _ ->
                 val name = input.text.toString().trim()
-                if (name.isEmpty() || Presets.BUILT_IN.containsKey(name)) {
+                if (name.isEmpty() || Presets.BUILT_IN.containsKey(name) || Presets.isAutoEq(name)) {
                     toast("Nama kosong atau sama dengan preset bawaan"); return@setPositiveButton
                 }
                 Store.customPresets[name] = Store.userCurve().map { (it * 2).roundToInt() / 2f }.toFloatArray()
@@ -543,15 +600,121 @@ class MainActivity : Activity() {
     }
 
     private fun pickDevicePreset(output: String) {
-        val names = listOf("— Tidak diatur —") + Presets.all().keys.toList()
+        val names = listOf("— Tidak diatur —", "🔍 Cari headset (AutoEq)…") + Presets.quick().keys.toList()
         val cur = names.indexOf(Store.devicePresets[output] ?: "").coerceAtLeast(0)
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
             .setTitle(Outputs.label(output))
             .setSingleChoiceItems(names.toTypedArray(), cur) { dlg, which ->
-                if (which == 0) Store.devicePresets.remove(output) else Store.devicePresets[output] = names[which]
-                commit(); refreshLabels(); dlg.dismiss()
+                dlg.dismiss()
+                when (which) {
+                    0 -> { Store.devicePresets.remove(output); commit(); refreshLabels() }
+                    1 -> searchDialog { picked -> Store.devicePresets[output] = picked; commit(); refreshLabels() }
+                    else -> { Store.devicePresets[output] = names[which]; commit(); refreshLabels() }
+                }
             }
             .show()
+    }
+
+    /** Cari di semua preset: bawaan, buatan Anda, dan ±6.000 headset AutoEq. */
+    private fun searchDialog(onPick: ((String) -> Unit)?) {
+        val all = AutoEq.all()
+        val quick = Presets.quick().keys.toList()
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), 0)
+        }
+        val input = EditText(this).apply {
+            hint = "Ketik nama headset/preset, mis. Galaxy Buds, KZ, Dangdut"
+            setSingleLine()
+        }
+        val info = tv("", 11.5f, cMuted)
+        val list = ListView(this)
+        val shown = ArrayList<String>()   // nama preset sebenarnya
+        val labels = ArrayList<String>()
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+        list.adapter = adapter
+        box.addView(input, LinearLayout.LayoutParams(match, wrap))
+        box.addView(info)
+        box.addView(list, LinearLayout.LayoutParams(match, dp(380)))
+
+        fun filter(q: String) {
+            val t = q.trim().lowercase()
+            shown.clear(); labels.clear()
+            for (n in quick) if (t.isEmpty() || n.lowercase().contains(t)) {
+                shown.add(n); labels.add((if (Presets.isCustom(n)) "★ " else "♪ ") + n)
+            }
+            var count = 0
+            if (t.length >= 2) {
+                val words = t.split(" ").filter { it.isNotBlank() }
+                for (e in all) {
+                    val ln = e.name.lowercase()
+                    if (words.all { ln.contains(it) }) {
+                        count++
+                        if (count <= 300) { shown.add(Presets.AUTOEQ_PREFIX + e.name); labels.add("🎧 ${e.name}  ·  ${e.type}") }
+                    }
+                }
+            }
+            info.text = when {
+                t.length < 2 -> "Ketik minimal 2 huruf untuk mencari di ${all.size} headset."
+                count > 300 -> "$count headset cocok, menampilkan 300 pertama. Perjelas pencarian."
+                else -> "$count headset cocok."
+            }
+            adapter.notifyDataSetChanged()
+        }
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) { filter(s?.toString() ?: "") }
+        })
+        filter("")
+        val dlg = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(if (onPick == null) "Cari preset" else "Pilih preset")
+            .setView(box)
+            .setNegativeButton("Tutup", null)
+            .create()
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val name = shown.getOrNull(pos) ?: return@setOnItemClickListener
+            dlg.dismiss()
+            if (onPick != null) {
+                onPick(name)
+            } else {
+                val wasMode = Store.bandMode
+                Store.applyPreset(name)
+                commit(); refreshAll()
+                if (Presets.isAutoEq(name) && wasMode != 31) toast("Preset headset memakai 31 band supaya koreksinya akurat")
+                else toast("Preset: ${name.removePrefix(Presets.AUTOEQ_PREFIX)}")
+            }
+        }
+        dlg.show()
+    }
+
+    private fun setBands(mode: Int) {
+        if (Store.bandMode == mode) return
+        Store.setBandMode(mode)
+        commit(); refreshAll()
+        toast("$mode band")
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data ?: return
+        if (resultCode != RESULT_OK) return
+        try {
+            when (requestCode) {
+                REQ_EXPORT -> {
+                    contentResolver.openOutputStream(uri, "wt")?.use { it.write(Store.exportJson().toByteArray()) }
+                    toast("Preset diekspor")
+                }
+                REQ_IMPORT -> {
+                    val text = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: ""
+                    val n = Store.importJson(text)
+                    commit(); refreshAll()
+                    toast(if (n > 0) "$n preset diimpor" else "Tidak ada preset yang bisa diimpor dari file ini")
+                }
+            }
+        } catch (e: Exception) {
+            toast("Gagal: ${e.message ?: "file tidak valid"}")
+        }
     }
 
     // ---------------- Refresh ----------------
@@ -562,8 +725,9 @@ class MainActivity : Activity() {
         val user = Store.userCurve()
         val corrOn = Store.adaptiveOn && EqService.instance != null && AppState.frames >= Adaptive.READY
         curve.userGains = Store.gains.copyOf()
-        curve.totalGains = FloatArray(Bands.N) { user[it] + if (corrOn) AppState.corr[it] else 0f }
-        curve.correction = if (corrOn) AppState.corr.copyOf() else null
+        val corr = Bands.resample(AppState.corr, Bands.FREQS)
+        curve.totalGains = FloatArray(user.size) { user[it] + if (corrOn) corr[it] else 0f }
+        curve.correction = if (corrOn) corr else null
         curve.invalidate()
     }
 
@@ -598,9 +762,15 @@ class MainActivity : Activity() {
         }
         tvVirt.text = "Stereo luas (Virtualizer): ${Store.virtualizer / 10}%"
         btnReverb.text = REVERBS[Store.reverb.coerceIn(0, REVERBS.size - 1)]
+        btnComp.text = COMPRESSORS[Store.compressor.coerceIn(0, COMPRESSORS.size - 1)]
+        for ((b, m) in listOf(btnB10 to 10, btnB31 to 31)) {
+            val on = Store.bandMode == m
+            b.background = if (on) rounded(cAccent, cAccent, 9) else rounded(cPanel2, cLine, 9)
+            b.setTextColor(if (on) 0xFF1A1205.toInt() else cText)
+        }
         tvLimTh.text = "Ambang limiter: ${sgn(Store.limiterThreshold)} dB"
         sbLimTh.isEnabled = Store.limiterOn
-        for ((o, b) in deviceButtons) b.text = Store.devicePresets[o] ?: "Pilih preset"
+        for ((o, b) in deviceButtons) b.text = Store.devicePresets[o]?.removePrefix(Presets.AUTOEQ_PREFIX)?.let { if (it.length > 22) it.take(21) + "…" else it } ?: "Pilih preset"
     }
 
     private fun avg(a: FloatArray, i: Int, j: Int): Float {

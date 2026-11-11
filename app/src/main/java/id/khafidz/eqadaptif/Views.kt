@@ -26,8 +26,8 @@ private const val C_TEXT = 0xFFE9ECF3.toInt()
  * garis koreksi AI (ungu putus-putus), dan spektrum musik di belakangnya.
  */
 class EqCurveView(ctx: Context) : View(ctx) {
-    var userGains = FloatArray(Bands.N)          // posisi titik (preset)
-    var totalGains = FloatArray(Bands.N)         // preset + nada + koreksi AI
+    var userGains = FloatArray(10)               // posisi titik (preset)
+    var totalGains = FloatArray(10)              // preset + nada + koreksi AI
     var correction: FloatArray? = null           // koreksi AI (null = tidak tampil)
     var onBandChange: ((Int, Float) -> Unit)? = null
     var onBandRelease: (() -> Unit)? = null
@@ -60,7 +60,10 @@ class EqCurveView(ctx: Context) : View(ctx) {
     }
     private val pBubble = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2A2E3A.toInt() }
 
-    private fun x(i: Int): Float = padL + (width - padL - padR) * i / (Bands.N - 1f)
+    private val n: Int get() = userGains.size
+    private val labelSet = setOf(31.5f, 31f, 62f, 63f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f)
+
+    private fun x(i: Int): Float = padL + (width - padL - padR) * i / (n - 1f).coerceAtLeast(1f)
     private fun y(db: Float): Float {
         val h = height - padT - padB
         return padT + h / 2f - db.coerceIn(-range - 3, range + 3) / (range * 2) * h
@@ -83,7 +86,8 @@ class EqCurveView(ctx: Context) : View(ctx) {
         }
         // label frekuensi
         pLabel.textAlign = Paint.Align.CENTER
-        for (i in 0 until Bands.N) c.drawText(Bands.LABELS[i], x(i), h - 6 * d, pLabel)
+        val fr = Bands.freqsFor(n)
+        for (i in 0 until n) if (fr[i] in labelSet) c.drawText(Bands.label(fr[i]), x(i), h - 6 * d, pLabel)
         pLabel.textAlign = Paint.Align.LEFT
 
         // spektrum
@@ -98,7 +102,7 @@ class EqCurveView(ctx: Context) : View(ctx) {
         // kurva total (spline halus)
         val path = smooth(totalGains)
         val fill = Path(path)
-        fill.lineTo(x(Bands.N - 1), y(0f))
+        fill.lineTo(x(n - 1), y(0f))
         fill.lineTo(x(0), y(0f))
         fill.close()
         pFill.shader = LinearGradient(0f, padT, 0f, h - padB, 0x55FFB547, 0x05FFB547, Shader.TileMode.CLAMP)
@@ -109,30 +113,32 @@ class EqCurveView(ctx: Context) : View(ctx) {
         correction?.let { c.drawPath(smooth(it), pCorr) }
 
         // titik preset
-        for (i in 0 until Bands.N) {
-            val r = if (i == dragging) 11 * d else 8 * d
+        val dot = if (n > 10) 5 * d else 8 * d
+        for (i in 0 until n) {
+            val r = if (i == dragging) dot + 3 * d else dot
             c.drawCircle(x(i), y(userGains[i]), r, pDot)
             c.drawCircle(x(i), y(userGains[i]), r, pDotRing)
         }
         // nilai saat digeser
         if (dragging >= 0) {
             val v = userGains[dragging]
-            val txt = (if (v > 0) "+" else "") + String.format("%.1f dB", v)
-            val bx = x(dragging).coerceIn(padL + 34 * d, w - padR - 34 * d)
+            val txt = Bands.label(Bands.freqsFor(n)[dragging]) + " " + (if (v > 0) "+" else "") + String.format("%.1f", v)
+            val bx = x(dragging).coerceIn(padL + 46 * d, w - padR - 46 * d)
             val by = (y(v) - 26 * d).coerceAtLeast(padT + 10 * d)
-            c.drawRoundRect(RectF(bx - 34 * d, by - 14 * d, bx + 34 * d, by + 6 * d), 8 * d, 8 * d, pBubble)
+            c.drawRoundRect(RectF(bx - 46 * d, by - 14 * d, bx + 46 * d, by + 6 * d), 8 * d, 8 * d, pBubble)
             c.drawText(txt, bx, by, pVal)
         }
     }
 
     private fun smooth(g: FloatArray): Path {
         val p = Path()
+        if (g.size != n || n < 2) return p
         p.moveTo(x(0), y(g[0]))
-        for (i in 0 until Bands.N - 1) {
+        for (i in 0 until n - 1) {
             val x0 = x(i); val y0 = y(g[i])
             val x1 = x(i + 1); val y1 = y(g[i + 1])
             val yPrev = y(g[maxOf(i - 1, 0)])
-            val yNext = y(g[minOf(i + 2, Bands.N - 1)])
+            val yNext = y(g[minOf(i + 2, n - 1)])
             val cx1 = x0 + (x1 - x0) / 3f
             val cy1 = y0 + (y1 - yPrev) / 6f
             val cx2 = x1 - (x1 - x0) / 3f
@@ -148,7 +154,7 @@ class EqCurveView(ctx: Context) : View(ctx) {
             MotionEvent.ACTION_DOWN -> {
                 var best = 0
                 var bestD = Float.MAX_VALUE
-                for (i in 0 until Bands.N) {
+                for (i in 0 until n) {
                     val dd = abs(e.x - x(i))
                     if (dd < bestD) { bestD = dd; best = i }
                 }

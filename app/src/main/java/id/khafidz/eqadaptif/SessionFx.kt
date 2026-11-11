@@ -7,50 +7,51 @@ import kotlin.math.abs
 import kotlin.math.log10
 
 /** Parameter suara yang dipasang ke setiap sesi. */
-data class FxParams(
+class FxParams(
     val gains: FloatArray,
+    val edges: FloatArray,
     val preamp: Float,
     val balance: Int,
     val limiterOn: Boolean,
     val limiterThreshold: Float,
+    val compressor: Int,
     val virtualizer: Int,
     val reverb: Int
 )
 
 /**
  * Semua efek untuk satu sesi audio:
- *  - DynamicsProcessing: EQ 10 band, preamp + balance per kanal, limiter
+ *  - DynamicsProcessing: EQ 10/31 band, compressor, preamp + balance per kanal, limiter
  *  - Virtualizer (stereo luas / 3D), opsional
  *  - PresetReverb, opsional
  */
-class SessionFx(val sid: Int) {
+class SessionFx(val sid: Int, val bandCount: Int) {
     private val dp: DynamicsProcessing
     private var virt: Virtualizer? = null
     private var rev: PresetReverb? = null
     private var last: FxParams? = null
-    var virtSupported = true
-        private set
 
     init {
         val cfg = DynamicsProcessing.Config.Builder(
             DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
-            2,          // stereo
-            true, Bands.N,
-            false, 0,
-            false, 0,
-            true
+            2,                  // stereo
+            true, bandCount,    // pre-EQ
+            true, 1,            // compressor (1 band, seluruh frekuensi)
+            false, 0,           // post-EQ
+            true                // limiter
         ).build()
         dp = DynamicsProcessing(Int.MAX_VALUE, sid, cfg)
         dp.setEnabled(true)
     }
 
     fun apply(p: FxParams, force: Boolean = false) {
+        if (p.gains.size != bandCount) return
         val l = last
         // EQ
         if (force || l == null || p.gains.indices.any { abs(p.gains[it] - l.gains[it]) > 0.05f }) {
-            for (i in 0 until Bands.N) {
+            for (i in 0 until bandCount) {
                 try {
-                    dp.setPreEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, Bands.upperEdge(i), p.gains[i]))
+                    dp.setPreEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, p.edges[i], p.gains[i]))
                 } catch (_: Exception) {}
             }
         }
@@ -66,6 +67,8 @@ class SessionFx(val sid: Int) {
                 try { dp.setInputGainAllChannelsTo(p.preamp) } catch (_: Exception) {}
             }
         }
+        // Compressor
+        if (force || l == null || p.compressor != l.compressor) applyCompressor(p.compressor)
         // Limiter
         if (force || l == null || p.limiterOn != l.limiterOn || abs(p.limiterThreshold - l.limiterThreshold) > 0.05f) {
             try {
@@ -74,11 +77,31 @@ class SessionFx(val sid: Int) {
                 )
             } catch (_: Exception) {}
         }
-        // Virtualizer
         if (force || l == null || p.virtualizer != l.virtualizer) applyVirtualizer(p.virtualizer)
-        // Reverb
         if (force || l == null || p.reverb != l.reverb) applyReverb(p.reverb)
         last = p
+    }
+
+    /** 0 mati, 1 ringan, 2 sedang, 3 kuat: menyamakan bagian pelan dan keras. */
+    private fun applyCompressor(level: Int) {
+        try {
+            val on = level > 0
+            val threshold = when (level) { 1 -> -18f; 2 -> -24f; else -> -30f }
+            val ratio = when (level) { 1 -> 2f; 2 -> 3f; else -> 4f }
+            val makeup = when (level) { 1 -> 3f; 2 -> 6f; else -> 9f }
+            dp.setMbcAllChannelsTo(DynamicsProcessing.Mbc(true, on, 1))
+            dp.setMbcBandAllChannelsTo(
+                0,
+                DynamicsProcessing.MbcBand(
+                    on, 20000f,
+                    10f, 150f,          // attack, release (ms)
+                    ratio, threshold,
+                    6f,                 // knee
+                    -90f, 1f,           // noise gate off
+                    0f, if (on) makeup else 0f
+                )
+            )
+        } catch (_: Exception) {}
     }
 
     private fun applyVirtualizer(strength: Int) {
@@ -88,12 +111,9 @@ class SessionFx(val sid: Int) {
                 return
             }
             val v = virt ?: Virtualizer(0, sid).also { virt = it }
-            virtSupported = v.strengthSupported
             v.setStrength(strength.coerceIn(0, 1000).toShort())
             v.setEnabled(true)
-        } catch (_: Exception) {
-            virtSupported = false
-        }
+        } catch (_: Exception) {}
     }
 
     private fun applyReverb(preset: Int) {

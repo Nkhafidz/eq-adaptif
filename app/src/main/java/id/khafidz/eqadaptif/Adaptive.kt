@@ -26,7 +26,7 @@ class Adaptive {
 
         /** Perkiraan keseimbangan rata-rata musik modern (per-bin, dB), kemiringan ±-4.5 dB/oktaf. */
         val DEFAULT_TARGET: FloatArray = normalize(FloatArray(10) { i ->
-            (-4.5 * ln(Bands.FREQS[i] / 1000.0) / ln(2.0)).toFloat() - if (i == 9) 6f else 0f
+            (-4.5 * ln(Bands.F10[i] / 1000.0) / ln(2.0)).toFloat() - if (i == 9) 6f else 0f
         })
 
         /** Ubah FFT 8-bit dari Visualizer menjadi daya rata-rata per band. */
@@ -42,7 +42,7 @@ class Adaptive {
                 mag[k] = re * re + im * im
             }
             return DoubleArray(10) { i ->
-                val f = Bands.FREQS[i]
+                val f = Bands.F10[i]
                 var lo = ceil(f / 1.41421356 / binHz).toInt().coerceAtLeast(1)
                 var hi = floor(f * 1.41421356 / binHz).toInt().coerceAtMost(bins - 1)
                 if (hi < lo) {

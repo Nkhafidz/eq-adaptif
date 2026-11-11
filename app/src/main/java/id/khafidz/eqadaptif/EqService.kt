@@ -206,7 +206,7 @@ class EqService : Service() {
         if (fx.containsKey(sid)) return
         if (sid != 0 && globalActive()) { publishSessions(); return }
         try {
-            val s = SessionFx(sid)
+            val s = SessionFx(sid, Bands.N)
             fx[sid] = s
             s.apply(currentParams(), true)
             AppState.dpError = null
@@ -231,24 +231,38 @@ class EqService : Service() {
 
     private fun currentParams(): FxParams {
         val corrOn = Store.adaptiveOn
+        val freqs = Bands.FREQS
         val user = Store.userCurve()
-        val g = FloatArray(Bands.N) { (user[it] + if (corrOn) adaptive.C[it] else 0f).coerceIn(-15f, 15f) }
+        val corr = if (corrOn) Bands.resample(adaptive.C, freqs) else FloatArray(freqs.size)
+        val g = FloatArray(freqs.size) { (user[it] + corr[it]).coerceIn(-15f, 15f) }
         val boost = if (corrOn) (adaptive.C.maxOrNull() ?: 0f).coerceAtLeast(0f) else 0f
         val toneBoost = maxOf(Store.bass, Store.treble, 0f) * 0.5f
         lastApplied = g
         return FxParams(
             gains = g,
+            edges = Bands.edges(freqs),
             preamp = Store.preamp - boost * 0.5f - toneBoost,
             balance = Store.balance,
             limiterOn = Store.limiterOn,
             limiterThreshold = Store.limiterThreshold,
+            compressor = Store.compressor,
             virtualizer = Store.virtualizer,
             reverb = Store.reverb
         )
     }
 
+    /** Jumlah band berubah (10 <-> 31): efek dibuat ulang karena jumlah band DynamicsProcessing tetap. */
+    private fun rebuildIfBandModeChanged() {
+        val stale = fx.filter { it.value.bandCount != Bands.N }.keys.toList()
+        for (sid in stale) {
+            fx.remove(sid)?.release()
+            attach(sid)
+        }
+    }
+
     /** Dipanggil setelah pengaturan berubah dari layar, widget, atau notifikasi. */
     fun forceApply() {
+        rebuildIfBandModeChanged()
         val p = currentParams()
         fx.values.forEach { it.apply(p, false) }
         if (Store.presetName != lastNotifPreset) updateNotification()
@@ -363,9 +377,9 @@ class EqService : Service() {
         updateSpectrum(fft, srHz)
         val p = Adaptive.bandPowers(fft, srHz)
         // Visualizer mendengar suara SETELAH EQ; kurangi EQ yang dipasang agar didapat karakter asli lagu.
-        val applied = if (fx.isEmpty()) null else lastApplied
+        val applied = if (fx.isEmpty()) null else lastApplied?.let { Bands.resample(it, Bands.F10) }
         if (applied != null) {
-            for (i in 0 until Bands.N) p[i] = p[i] / 10.0.pow(applied[i] / 10.0)
+            for (i in 0 until 10) p[i] = p[i] / 10.0.pow(applied[i] / 10.0)
         }
         adaptive.addFrame(p)
     }
@@ -409,6 +423,7 @@ class EqService : Service() {
         if (fx.isEmpty() && !Store.legacy) scanPlayback(am.activePlaybackConfigurations)
 
         adaptive.update(Store.target ?: Adaptive.DEFAULT_TARGET, Store.strength, Store.limit)
+        rebuildIfBandModeChanged()
         val p = currentParams()
         fx.values.forEach { it.apply(p) }
         if (Store.presetName != lastNotifPreset) updateNotification()

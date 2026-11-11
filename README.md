@@ -30,3 +30,7 @@ Alternatif: buka folder ini dengan Android Studio, lalu jalankan **Build → Bui
 - Izin rekam audio hanya dipakai `Visualizer` untuk membaca spektrum musik yang diputar, bukan untuk merekam mikrofon.
 - Beberapa HP (terutama dengan efek audio bawaan seperti Dolby/Sound Assistant) bisa bentrok. Kalau suara tidak berubah, coba matikan efek bawaan HP.
 - Kunci di folder `keystore/` hanya untuk menandatangani APK pribadi, supaya update bisa dipasang di atas versi lama. Jangan dipakai untuk aplikasi yang dirilis ke Play Store.
+
+## Kredit
+
+Preset headset berasal dari [AutoEq](https://github.com/jaakkopasanen/AutoEq) oleh Jaakko Pasanen (lisensi MIT), dikonversi ke 31 band.
