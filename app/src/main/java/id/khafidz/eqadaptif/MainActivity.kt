@@ -480,6 +480,8 @@ class MainActivity : Activity() {
 
         tvStatus.text = when {
             !running -> "Nyalakan Equalizer terlebih dahulu."
+            AppState.sessions.isEmpty() && frames >= Adaptive.READY ->
+                "Musik terdeteksi, tapi EQ belum terhubung ke aplikasi musiknya, jadi koreksi belum diterapkan. Paksa berhenti YouTube Music lalu buka lagi, atau nyalakan Mode legacy di bawah."
             frames == 0 -> "Putar musik untuk mulai menganalisis."
             frames < Adaptive.READY -> "Menganalisis karakter lagu… $prog%"
             !Store.adaptiveOn -> {
