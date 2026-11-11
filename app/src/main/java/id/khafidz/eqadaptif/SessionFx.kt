@@ -151,6 +151,18 @@ class SessionFx(val sid: Int, val bandCount: Int) {
         } catch (_: Exception) {}
     }
 
+    private var bypassed = false
+
+    /** Tes A/B: efek tetap terpasang tetapi tidak memproses suara. */
+    fun setBypass(b: Boolean) {
+        if (b == bypassed) return
+        bypassed = b
+        try { dp.setEnabled(!b) } catch (_: Exception) {}
+        try { loud?.setEnabled(!b && (last?.loudBoost ?: 0f) > 0.05f) } catch (_: Exception) {}
+        try { virt?.setEnabled(!b && (last?.virtualizer ?: 0) > 0) } catch (_: Exception) {}
+        try { rev?.setEnabled(!b && (last?.reverb ?: 0) > 0) } catch (_: Exception) {}
+    }
+
     fun release() {
         try { dp.setEnabled(false); dp.release() } catch (_: Exception) {}
         try { virt?.release() } catch (_: Exception) {}

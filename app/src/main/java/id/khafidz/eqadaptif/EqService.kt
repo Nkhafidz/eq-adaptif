@@ -58,6 +58,9 @@ class EqService : Service() {
     private val fx = HashMap<Int, SessionFx>()
     private var viz: Visualizer? = null
     val adaptive = Adaptive()
+    /** Tes A/B dari layar: efek terpasang tapi tidak memproses (tidak disimpan). */
+    var bypass = false
+        set(v) { field = v; fx.values.forEach { it.setBypass(v) } }
 
     private var lastApplied: FloatArray? = null
     private var legacyFailed = false
@@ -209,6 +212,7 @@ class EqService : Service() {
             val s = SessionFx(sid, Bands.N)
             fx[sid] = s
             s.apply(currentParams(), true)
+            s.setBypass(bypass)
             AppState.dpError = null
         } catch (e: Exception) {
             if (sid == 0) legacyFailed = true

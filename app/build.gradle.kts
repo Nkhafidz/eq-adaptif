@@ -11,8 +11,8 @@ android {
         applicationId = "id.khafidz.eqadaptif"
         minSdk = 28          // DynamicsProcessing butuh Android 9+
         targetSdk = 34
-        versionCode = 6
-        versionName = "3.2"
+        versionCode = 7
+        versionName = "3.3"
     }
 
     // Kunci tanda tangan tetap, supaya update APK bisa dipasang di atas versi lama

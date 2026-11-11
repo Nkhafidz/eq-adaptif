@@ -102,6 +102,7 @@ class MainActivity : Activity() {
     private val deviceButtons = HashMap<String, Button>()
     // Lanjutan
     private lateinit var swGlobal: Switch
+    private lateinit var swBypass: Switch
 
     private var suppress = false
     private var startAfterPermission = false
@@ -511,6 +512,20 @@ class MainActivity : Activity() {
         adv.addView(swGlobal)
         adv.addView(tv("Menerapkan EQ ke semua suara HP. Matikan hanya jika suara tidak berubah atau berlipat.", 11.5f, cMuted))
         gap(adv, 10)
+        swBypass = sw("Tes: matikan pemrosesan sementara", cViolet) { on ->
+            val svc = EqService.instance
+            if (svc == null) { toast("Nyalakan Equalizer dulu"); refresh(); return@sw }
+            svc.bypass = on
+            toast(if (on) "Pemrosesan dimatikan (EQ tetap terpasang)" else "Pemrosesan aktif lagi")
+        }
+        adv.addView(swBypass)
+        adv.addView(tv(
+            "Untuk mencari penyebab volume turun. Putar lagu, lalu nyalakan sakelar ini:\n" +
+            "• Volume kembali normal → penyebabnya pemrosesan EQ (bisa dikompensasi dengan VOLUME+).\n" +
+            "• Volume tetap kecil → penyebabnya jalur audio HP saat mode global aktif. Coba Opsi pengembang → \"Nonaktifkan volume absolut\" (Bluetooth), atau pakai VOLUME+.",
+            11.5f, cMuted
+        ).apply { setLineSpacing(0f, 1.2f) })
+        gap(adv, 10)
         adv.addView(btn("Pengaturan baterai (agar tidak dimatikan sistem)") {
             try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (_: Exception) {}
         })
@@ -800,6 +815,7 @@ class MainActivity : Activity() {
         val running = svc != null
         suppress = true
         swRun.isChecked = running
+        swBypass.isChecked = svc?.bypass ?: false
         suppress = false
 
         tvSessions.text = when {
