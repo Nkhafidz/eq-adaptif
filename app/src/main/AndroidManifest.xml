@@ -40,6 +40,32 @@
         </service>
 
         <receiver
+            android:name=".EqWidget"
+            android:exported="true"
+            android:label="EQ Adaptif">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
+        <service
+            android:name=".EqTile"
+            android:exported="true"
+            android:icon="@drawable/ic_notif"
+            android:label="EQ Adaptif"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
+        </service>
+
+        <receiver
             android:name=".SessionReceiver"
             android:exported="true">
             <intent-filter>

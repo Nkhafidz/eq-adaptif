@@ -2,6 +2,7 @@ package id.khafidz.eqadaptif
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -11,10 +12,12 @@ import android.media.audiofx.AudioEffect
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -27,6 +30,11 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
+
+    companion object {
+        const val ACTION_AUTOSTART = "id.khafidz.eqadaptif.AUTOSTART"
+        val REVERBS = arrayOf("Mati", "Ruang kecil", "Ruang sedang", "Ruang besar", "Aula sedang", "Aula besar", "Plate")
+    }
 
     // Warna
     private val cBg = 0xFF0E0F13.toInt()
@@ -42,34 +50,51 @@ class MainActivity : Activity() {
     private val match = ViewGroup.LayoutParams.MATCH_PARENT
     private val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
 
+    // Status
     private lateinit var swRun: Switch
     private lateinit var tvSessions: TextView
+    private lateinit var tvOutput: TextView
     private lateinit var tvError: TextView
+    // EQ
+    private lateinit var curve: EqCurveView
+    private lateinit var presetRow: LinearLayout
+    private lateinit var btnDelete: Button
+    private val presetButtons = LinkedHashMap<String, Button>()
+    private lateinit var knobBass: KnobView
+    private lateinit var knobTreble: KnobView
+    private lateinit var knobPre: KnobView
+    // AI
     private lateinit var swAdaptive: Switch
     private lateinit var tvStatus: TextView
     private lateinit var progress: ProgressBar
     private lateinit var tvBass: TextView
     private lateinit var tvMid: TextView
     private lateinit var tvTreble: TextView
-    private lateinit var tvTitle: TextView
     private lateinit var sbStrength: SeekBar
     private lateinit var tvStrength: TextView
     private lateinit var sbLimit: SeekBar
     private lateinit var tvLimit: TextView
     private lateinit var tvTarget: TextView
     private lateinit var btnLock: Button
-    private lateinit var swLegacy: Switch
-    private lateinit var sbPre: SeekBar
-    private lateinit var tvPre: TextView
-    private val gainBars = arrayOfNulls<SeekBar>(10)
-    private val gainVals = arrayOfNulls<TextView>(10)
-    private val corrVals = arrayOfNulls<TextView>(10)
-    private val presetButtons = LinkedHashMap<String, Button>()
-    private lateinit var presetRow: LinearLayout
+    // Efek
+    private lateinit var sbBalance: SeekBar
+    private lateinit var tvBalance: TextView
+    private lateinit var sbVirt: SeekBar
+    private lateinit var tvVirt: TextView
+    private lateinit var btnReverb: Button
+    private lateinit var swLimiter: Switch
+    private lateinit var sbLimTh: SeekBar
+    private lateinit var tvLimTh: TextView
+    // Perangkat
+    private lateinit var swAutoDevice: Switch
+    private val deviceButtons = HashMap<String, Button>()
+    // Lanjutan
+    private lateinit var swGlobal: Switch
 
     private var suppress = false
     private var startAfterPermission = false
     private val listener: () -> Unit = { refresh() }
+    private val specListener: () -> Unit = { curve.invalidate() }
 
     // ---------------- Lifecycle ----------------
 
@@ -91,20 +116,35 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         AppState.addListener(listener)
+        AppState.spectrumListener = specListener
         refreshAll()
     }
 
     override fun onPause() {
         AppState.removeListener(listener)
+        if (AppState.spectrumListener === specListener) AppState.spectrumListener = null
         super.onPause()
     }
 
-    /** Dibuka dari menu "Equalizer" di aplikasi musik: ikut membawa nomor sesi audionya. */
     private fun handleIntent(i: Intent?) {
-        if (i == null || i.action != AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL) return
-        val sid = i.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1)
-        val pkg = i.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME) ?: callingPackage ?: "?"
-        if (sid > 0) Sessions.onOpen(sid, pkg)
+        if (i == null) return
+        if (i.action == ACTION_AUTOSTART) {
+            if (EqService.instance == null) startEq()
+            return
+        }
+        // Dibuka dari menu "Equalizer" aplikasi musik: ikut membawa nomor sesi audionya.
+        if (i.action == AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL) {
+            val sid = i.getIntExtra(AudioEffect.EXTRA_AUDIO_SESSION, -1)
+            val pkg = i.getStringExtra(AudioEffect.EXTRA_PACKAGE_NAME) ?: callingPackage ?: "?"
+            if (sid > 0) Sessions.onOpen(sid, pkg)
+        }
+    }
+
+    /** Simpan + terapkan langsung ke service. */
+    private fun commit() {
+        Store.save()
+        EqService.instance?.forceApply()
+        EqWidget.updateAll(this)
     }
 
     // ---------------- Izin & service ----------------
@@ -131,11 +171,11 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (startAfterPermission) {
             startAfterPermission = false
-            EqService.start(this) // tetap jalan; tanpa izin rekam audio hanya Auto-seimbang yang mati
+            EqService.start(this)
         }
     }
 
-    // ---------------- Membangun tampilan ----------------
+    // ---------------- Pembangun tampilan ----------------
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).roundToInt()
 
@@ -154,13 +194,17 @@ class MainActivity : Activity() {
             if (bold) setTypeface(typeface, Typeface.BOLD)
         }
 
-    private fun card(parent: LinearLayout, accent: Boolean = false): LinearLayout {
+    private fun card(parent: LinearLayout, title: String? = null, accent: Boolean = false): LinearLayout {
         val c = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
             background = rounded(if (accent) 0xFF1A1626.toInt() else cPanel, if (accent) 0xFF3A2F55.toInt() else cLine, 14)
         }
         parent.addView(c, LinearLayout.LayoutParams(match, wrap).apply { bottomMargin = dp(14) })
+        if (title != null) {
+            c.addView(tv(title, 16f, cText, true))
+            gap(c, 6)
+        }
         return c
     }
 
@@ -179,12 +223,12 @@ class MainActivity : Activity() {
             setOnClickListener { onClick() }
         }
 
-    private fun sw(text: String, onChange: (Boolean) -> Unit): Switch =
+    private fun sw(text: String, thumb: Int = cAccent, onChange: (Boolean) -> Unit): Switch =
         Switch(this).apply {
             this.text = text
             textSize = 15f
             setTextColor(cText)
-            thumbTintList = ColorStateList.valueOf(cAccent)
+            thumbTintList = ColorStateList.valueOf(thumb)
             setOnCheckedChangeListener { _, checked -> if (!suppress) onChange(checked) }
         }
 
@@ -206,6 +250,11 @@ class MainActivity : Activity() {
         parent.addView(View(this), LinearLayout.LayoutParams(match, dp(h)))
     }
 
+    private fun hrow(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+    }
+
     private fun build(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -216,48 +265,86 @@ class MainActivity : Activity() {
             addView(root)
         }
 
-        // Judul
         root.addView(tv("EQ Adaptif", 26f, cText, true))
-        root.addView(tv("Equalizer untuk YouTube Music, Spotify & aplikasi musik lain", 13f, cMuted))
+        root.addView(tv("Equalizer + AI untuk YouTube Music & semua aplikasi musik", 13f, cMuted))
         gap(root, 14)
 
-        // --- Kartu status ---
+        // ===== Status =====
         val st = card(root)
         swRun = sw("Equalizer aktif") { on -> if (on) startEq() else EqService.stop(this) }
         st.addView(swRun)
         gap(st, 6)
         tvSessions = tv("", 13f, cMuted)
         st.addView(tvSessions)
+        tvOutput = tv("", 13f, cMuted)
+        st.addView(tvOutput)
         tvError = tv("", 12.5f, 0xFFFF6B6B.toInt())
         st.addView(tvError)
 
-        // --- Kartu Auto-seimbang ---
-        val ai = card(root, accent = true)
-        ai.addView(tv("✦ Auto-seimbang", 17f, cText, true))
-        ai.addView(tv("Menjaga karakter suara tetap sama walau lagu berganti, tanpa mengubah preset Anda.", 12.5f, cMuted))
+        // ===== Equalizer grafis =====
+        val eq = card(root, "Equalizer")
+        curve = EqCurveView(this)
+        curve.onBandChange = { i, v ->
+            Store.gains[i] = v
+            Store.presetName = null
+            EqService.instance?.forceApply()
+            highlightPreset()
+            updateCurve()
+        }
+        curve.onBandRelease = { commit() }
+        eq.addView(curve, LinearLayout.LayoutParams(match, dp(230)))
+        eq.addView(tv("Geser titik ke atas/bawah. Garis ungu putus-putus = koreksi AI.", 11.5f, cMuted))
+        gap(eq, 8)
+        presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        eq.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(presetRow)
+        }, LinearLayout.LayoutParams(match, wrap))
+        val pAct = hrow()
+        pAct.addView(btn("💾 Simpan preset") { savePresetDialog() })
+        btnDelete = btn("🗑 Hapus") { deletePresetDialog() }
+        pAct.addView(btnDelete, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(8) })
+        pAct.addView(btn("Reset") {
+            Store.applyPreset("Flat"); Store.bass = 0f; Store.treble = 0f; commit(); refreshAll()
+        }, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(8) })
+        eq.addView(pAct, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
+
+        // ===== Nada (kenop) =====
+        val tone = card(root, "Nada")
+        val knobs = hrow()
+        knobBass = KnobView(this, "BASS", -12f, 12f, cAccent)
+        knobTreble = KnobView(this, "TREBLE", -12f, 12f, cAccent)
+        knobPre = KnobView(this, "PREAMP", -12f, 12f, cTeal)
+        knobBass.onChange = { v -> Store.bass = v; EqService.instance?.forceApply(); updateCurve(); commitLater() }
+        knobTreble.onChange = { v -> Store.treble = v; EqService.instance?.forceApply(); updateCurve(); commitLater() }
+        knobPre.onChange = { v -> Store.preamp = v; EqService.instance?.forceApply(); commitLater() }
+        for (k in listOf(knobBass, knobTreble, knobPre)) knobs.addView(k, LinearLayout.LayoutParams(0, wrap, 1f))
+        tone.addView(knobs)
+        tone.addView(tv("Putar dengan menggeser jari ke atas/bawah. Ketuk dua kali untuk kembali ke 0.", 11.5f, cMuted))
+
+        // ===== AI Auto-seimbang =====
+        val ai = card(root, null, accent = true)
+        ai.addView(tv("✦ AI Auto-seimbang", 17f, cText, true))
+        ai.addView(tv("Mendengarkan tiap lagu lalu menyesuaikan bass, mid, dan treble supaya karakter suaranya tetap sama walau lagu berganti. Preset Anda tetap berlaku.", 12.5f, cMuted))
         gap(ai, 8)
-        swAdaptive = sw("Auto-seimbang") { on ->
-            Store.adaptiveOn = on; Store.save()
-            toast(if (on) "Auto-seimbang menyala" else "Auto-seimbang mati")
+        swAdaptive = sw("AI Auto-seimbang", cViolet) { on ->
+            Store.adaptiveOn = on; commit()
+            toast(if (on) "AI Auto-seimbang menyala" else "AI Auto-seimbang mati")
             refresh()
         }
-        swAdaptive.thumbTintList = ColorStateList.valueOf(cViolet)
         ai.addView(swAdaptive)
-        gap(ai, 8)
-        tvTitle = tv("", 12.5f, cMuted)
-        ai.addView(tvTitle)
+        gap(ai, 6)
         tvStatus = tv("", 13.5f, cText).apply {
             setPadding(dp(12), dp(10), dp(12), dp(10))
             background = rounded(0xFF0F0D16.toInt(), 0xFF2B2540.toInt(), 10)
         }
-        ai.addView(tvStatus, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(4) })
+        ai.addView(tvStatus, LinearLayout.LayoutParams(match, wrap))
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             progressTintList = ColorStateList.valueOf(cViolet)
         }
         ai.addView(progress, LinearLayout.LayoutParams(match, dp(10)))
-
-        val meters = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val meters = hrow()
         fun meter(label: String): TextView {
             val box = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -273,22 +360,21 @@ class MainActivity : Activity() {
         }
         tvBass = meter("BASS"); tvMid = meter("MID"); tvTreble = meter("TREBLE")
         ai.addView(meters, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
-
         gap(ai, 10)
         tvStrength = tv("", 13f, cMuted)
         ai.addView(tvStrength)
-        sbStrength = seek(100, cViolet) { p -> Store.strength = p; Store.save(); refreshLabels() }
+        sbStrength = seek(100, cViolet) { p -> Store.strength = p; commitLater(); refreshLabels() }
         ai.addView(sbStrength)
         ai.addView(tv("Rendah = karakter asli lagu lebih terasa. Tinggi = semua lagu makin mirip.", 11.5f, cMuted))
         gap(ai, 8)
         tvLimit = tv("", 13f, cMuted)
         ai.addView(tvLimit)
-        sbLimit = seek(8, cViolet) { p -> Store.limit = p + 2; Store.save(); refreshLabels() }
+        sbLimit = seek(8, cViolet) { p -> Store.limit = p + 2; commitLater(); refreshLabels() }
         ai.addView(sbLimit)
         gap(ai, 8)
         tvTarget = tv("", 13f, cMuted)
         ai.addView(tvTarget)
-        val tRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val tRow = hrow()
         btnLock = btn("🔒 Kunci karakter lagu ini") {
             val ok = EqService.instance?.lockTarget() ?: false
             toast(if (ok) "Karakter suara dikunci" else "Tunggu analisis lagu minimal 60%")
@@ -301,74 +387,81 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(8) })
         ai.addView(tRow, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(6) })
 
-        // --- Kartu preset & EQ manual ---
-        val eq = card(root)
-        eq.addView(tv("PRESET (SELERA ANDA)", 11.5f, cMuted))
-        presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        eq.addView(HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(presetRow)
-        }, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(6) })
-        renderPresets()
-        val actRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        actRow.addView(btn("Simpan sebagai \"Saya\"") {
-            Store.custom = Store.gains.copyOf(); Store.presetName = "Saya"; Store.save()
-            renderPresets(); refreshAll(); toast("Preset \"Saya\" disimpan")
-        })
-        actRow.addView(btn("Reset") { setPreset("Flat") }, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(8) })
-        eq.addView(actRow, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8); bottomMargin = dp(8) })
+        // ===== Efek =====
+        val fxc = card(root, "Efek")
+        tvBalance = tv("", 13f, cMuted)
+        fxc.addView(tvBalance)
+        sbBalance = seek(200, cTeal) { p -> Store.balance = p - 100; EqService.instance?.forceApply(); commitLater(); refreshLabels() }
+        fxc.addView(sbBalance)
+        gap(fxc, 8)
+        tvVirt = tv("", 13f, cMuted)
+        fxc.addView(tvVirt)
+        sbVirt = seek(100, cTeal) { p -> Store.virtualizer = p * 10; EqService.instance?.forceApply(); commitLater(); refreshLabels() }
+        fxc.addView(sbVirt)
+        fxc.addView(tv("Memperluas panggung suara. Paling terasa dengan headset.", 11.5f, cMuted))
+        gap(fxc, 10)
+        val rRow = hrow()
+        rRow.addView(tv("Reverb", 14f, cText), LinearLayout.LayoutParams(0, wrap, 1f))
+        btnReverb = btn("") {
+            AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Reverb")
+                .setSingleChoiceItems(REVERBS, Store.reverb) { dlg, which ->
+                    Store.reverb = which; commit(); refreshLabels(); dlg.dismiss()
+                }
+                .show()
+        }
+        rRow.addView(btnReverb)
+        fxc.addView(rRow)
+        gap(fxc, 10)
+        swLimiter = sw("Limiter (cegah suara pecah)") { on -> Store.limiterOn = on; commit(); refreshLabels() }
+        fxc.addView(swLimiter)
+        tvLimTh = tv("", 13f, cMuted)
+        fxc.addView(tvLimTh)
+        sbLimTh = seek(24, cTeal) { p -> Store.limiterThreshold = -p / 2f; EqService.instance?.forceApply(); commitLater(); refreshLabels() }
+        fxc.addView(sbLimTh)
 
-        fun row(label: String, color: Int, onChange: (Int) -> Unit): Triple<SeekBar, TextView, TextView> {
-            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-            r.addView(tv(label, 12f, cMuted).apply { typeface = Typeface.MONOSPACE }, LinearLayout.LayoutParams(dp(40), wrap))
-            val sb = seek(48, color, onChange)
-            r.addView(sb, LinearLayout.LayoutParams(0, wrap, 1f))
-            val v = tv("0", 12f, color).apply { typeface = Typeface.MONOSPACE; gravity = Gravity.END }
-            r.addView(v, LinearLayout.LayoutParams(dp(44), wrap))
-            val c = tv("", 11f, cViolet).apply { typeface = Typeface.MONOSPACE; gravity = Gravity.END }
-            r.addView(c, LinearLayout.LayoutParams(dp(44), wrap))
-            eq.addView(r, LinearLayout.LayoutParams(match, dp(40)))
-            return Triple(sb, v, c)
+        // ===== Perangkat =====
+        val dev = card(root, "Preset per perangkat")
+        swAutoDevice = sw("Ganti preset otomatis") { on ->
+            Store.autoDevice = on; commit()
+            toast(if (on) "Preset akan berganti sesuai perangkat" else "Ganti otomatis mati")
         }
-        val pre = row("Pre", cTeal) { p ->
-            Store.preamp = p / 2f - 12f; Store.save(); refreshLabels()
+        dev.addView(swAutoDevice)
+        dev.addView(tv("Contoh: Bass Boost saat pakai TWS, Vokal saat pakai speaker HP.", 11.5f, cMuted))
+        for (o in Outputs.ALL) {
+            val r = hrow()
+            r.addView(tv(Outputs.label(o), 13f, cText), LinearLayout.LayoutParams(0, wrap, 1f))
+            val b = btn("") { pickDevicePreset(o) }
+            r.addView(b)
+            deviceButtons[o] = b
+            dev.addView(r, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
         }
-        sbPre = pre.first; tvPre = pre.second
-        for (i in 0 until 10) {
-            val t = row(Bands.LABELS[i], cAccent) { p ->
-                Store.gains[i] = p / 2f - 12f
-                Store.presetName = null
-                Store.save()
-                highlightPreset(); refreshLabels()
-            }
-            gainBars[i] = t.first; gainVals[i] = t.second; corrVals[i] = t.third
-        }
-        eq.addView(tv("Kolom ungu = koreksi otomatis yang sedang ditambahkan oleh Auto-seimbang.", 11.5f, cMuted))
 
-        // --- Kartu lanjutan ---
-        val adv = card(root)
-        adv.addView(tv("Pengaturan lanjutan", 15f, cText, true))
-        gap(adv, 6)
-        swLegacy = sw("Mode legacy (global)") { on ->
-            Store.legacy = on; Store.save()
-            toast(if (on) "Mode legacy menyala" else "Mode legacy mati")
+        // ===== Lanjutan =====
+        val adv = card(root, "Pengaturan lanjutan")
+        swGlobal = sw("Mode global (disarankan untuk YouTube Music)") { on ->
+            Store.legacy = on; commit()
+            toast(if (on) "Mode global menyala" else "Mode global mati: EQ dipasang per aplikasi")
         }
-        adv.addView(swLegacy)
-        adv.addView(tv("Nyalakan hanya jika aplikasi musik Anda tidak terdeteksi. Di sebagian HP mode ini tidak berfungsi.", 11.5f, cMuted))
-        gap(adv, 12)
+        adv.addView(swGlobal)
+        adv.addView(tv("Menerapkan EQ ke semua suara HP. Matikan hanya jika suara tidak berubah atau berlipat.", 11.5f, cMuted))
+        gap(adv, 10)
         adv.addView(btn("Pengaturan baterai (agar tidak dimatikan sistem)") {
             try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (_: Exception) {}
         })
+        gap(adv, 8)
+        adv.addView(tv(
+            "Pintasan: tambahkan widget \"EQ Adaptif\" di layar utama, atau tombol \"EQ Adaptif\" di panel Quick Settings (tarik notifikasi → ikon pensil).",
+            11.5f, cMuted
+        ))
 
-        // --- Cara pakai ---
-        val help = card(root)
-        help.addView(tv("Cara pakai", 15f, cText, true))
+        // ===== Cara pakai =====
+        val help = card(root, "Cara pakai")
         help.addView(tv(
-            "1. Nyalakan \"Equalizer aktif\" di atas, izinkan perekaman audio & notifikasi.\n" +
-            "2. Buka YouTube Music lalu putar lagu. Jika belum terdeteksi, hentikan lalu putar ulang, atau tutup paksa YouTube Music dan buka lagi.\n" +
-            "3. Pilih preset favorit Anda.\n" +
-            "4. Putar lagu yang suaranya sudah pas, tunggu analisis penuh (±10 detik), tekan \"Kunci karakter lagu ini\".\n" +
-            "5. Nyalakan Auto-seimbang. Lagu berikutnya disesuaikan otomatis.\n\n" +
+            "1. Nyalakan \"Equalizer aktif\", izinkan rekam audio & notifikasi.\n" +
+            "2. Putar musik di YouTube Music. Mode global membuat EQ langsung bekerja.\n" +
+            "3. Pilih preset atau geser titik di grafik, atur Bass/Treble.\n" +
+            "4. AI: putar lagu yang suaranya sudah pas, tunggu analisis penuh (±10 detik), tekan \"Kunci karakter lagu ini\", lalu nyalakan AI Auto-seimbang.\n\n" +
             "Izin \"rekam audio\" hanya dipakai untuk membaca spektrum musik yang sedang diputar, bukan merekam suara Anda.",
             12.5f, cMuted
         ).apply { setLineSpacing(0f, 1.25f) })
@@ -376,19 +469,22 @@ class MainActivity : Activity() {
         return scroll
     }
 
-    // ---------------- Preset ----------------
-
-    private fun allPresets(): LinkedHashMap<String, FloatArray> {
-        val m = LinkedHashMap(Presets.ALL)
-        Store.custom?.let { m["Saya"] = it }
-        return m
+    // Simpan pengaturan sedikit tertunda supaya tidak menulis ke penyimpanan di setiap geseran.
+    private val saveRunnable = Runnable { Store.save(); EqWidget.updateAll(this) }
+    private fun commitLater() {
+        curve.removeCallbacks(saveRunnable)
+        curve.postDelayed(saveRunnable, 400)
     }
+
+    // ---------------- Preset ----------------
 
     private fun renderPresets() {
         presetRow.removeAllViews()
         presetButtons.clear()
-        for (name in allPresets().keys) {
-            val b = btn(name) { setPreset(name) }
+        for (name in Presets.all().keys) {
+            val b = btn(if (Presets.isCustom(name)) "★ $name" else name) {
+                Store.applyPreset(name); commit(); refreshAll()
+            }
             presetRow.addView(b, LinearLayout.LayoutParams(wrap, wrap).apply { marginEnd = dp(6) })
             presetButtons[name] = b
         }
@@ -401,32 +497,92 @@ class MainActivity : Activity() {
             b.background = if (active) rounded(cAccent, cAccent, 9) else rounded(cPanel2, cLine, 9)
             b.setTextColor(if (active) 0xFF1A1205.toInt() else cText)
         }
+        btnDelete.isEnabled = Presets.isCustom(Store.presetName)
+        btnDelete.alpha = if (btnDelete.isEnabled) 1f else 0.4f
     }
 
-    private fun setPreset(name: String) {
-        val g = allPresets()[name] ?: return
-        Store.gains = g.copyOf()
-        val peak = (g.maxOrNull() ?: 0f).coerceAtLeast(0f)
-        Store.preamp = -((peak * 0.6f * 2).roundToInt() / 2f) // cegah suara pecah
-        Store.presetName = name
-        Store.save()
-        refreshAll()
+    private fun savePresetDialog() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+            hint = "Nama preset, mis. TWS Malam"
+            setText(if (Presets.isCustom(Store.presetName)) Store.presetName else "")
+        }
+        val box = LinearLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(input, LinearLayout.LayoutParams(match, wrap)) }
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Simpan preset")
+            .setMessage("Menyimpan kurva EQ saat ini (termasuk kenop Bass/Treble).")
+            .setView(box)
+            .setPositiveButton("Simpan") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty() || Presets.BUILT_IN.containsKey(name)) {
+                    toast("Nama kosong atau sama dengan preset bawaan"); return@setPositiveButton
+                }
+                Store.customPresets[name] = Store.userCurve().map { (it * 2).roundToInt() / 2f }.toFloatArray()
+                Store.bass = 0f; Store.treble = 0f
+                Store.applyPreset(name)
+                commit(); renderPresets(); refreshAll()
+                toast("Preset \"$name\" disimpan")
+            }
+            .setNegativeButton("Batal", null)
+            .show()
+    }
+
+    private fun deletePresetDialog() {
+        val name = Store.presetName ?: return
+        if (!Presets.isCustom(name)) return
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Hapus preset \"$name\"?")
+            .setPositiveButton("Hapus") { _, _ ->
+                Store.customPresets.remove(name)
+                Store.devicePresets.entries.removeAll { it.value == name }
+                Store.presetName = null
+                commit(); renderPresets(); refreshAll()
+            }
+            .setNegativeButton("Batal", null)
+            .show()
+    }
+
+    private fun pickDevicePreset(output: String) {
+        val names = listOf("— Tidak diatur —") + Presets.all().keys.toList()
+        val cur = names.indexOf(Store.devicePresets[output] ?: "").coerceAtLeast(0)
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle(Outputs.label(output))
+            .setSingleChoiceItems(names.toTypedArray(), cur) { dlg, which ->
+                if (which == 0) Store.devicePresets.remove(output) else Store.devicePresets[output] = names[which]
+                commit(); refreshLabels(); dlg.dismiss()
+            }
+            .show()
     }
 
     // ---------------- Refresh ----------------
 
     private fun sgn(x: Float): String = (if (x > 0) "+" else "") + String.format("%.1f", x)
 
+    private fun updateCurve() {
+        val user = Store.userCurve()
+        val corrOn = Store.adaptiveOn && EqService.instance != null && AppState.frames >= Adaptive.READY
+        curve.userGains = Store.gains.copyOf()
+        curve.totalGains = FloatArray(Bands.N) { user[it] + if (corrOn) AppState.corr[it] else 0f }
+        curve.correction = if (corrOn) AppState.corr.copyOf() else null
+        curve.invalidate()
+    }
+
     private fun refreshAll() {
         suppress = true
         swAdaptive.isChecked = Store.adaptiveOn
-        swLegacy.isChecked = Store.legacy
+        swGlobal.isChecked = Store.legacy
+        swAutoDevice.isChecked = Store.autoDevice
+        swLimiter.isChecked = Store.limiterOn
         sbStrength.progress = Store.strength
         sbLimit.progress = Store.limit - 2
-        sbPre.progress = ((Store.preamp + 12f) * 2).roundToInt()
-        for (i in 0 until 10) gainBars[i]?.progress = ((Store.gains[i] + 12f) * 2).roundToInt()
+        sbBalance.progress = Store.balance + 100
+        sbVirt.progress = Store.virtualizer / 10
+        sbLimTh.progress = (-Store.limiterThreshold * 2).roundToInt()
+        knobBass.value = Store.bass
+        knobTreble.value = Store.treble
+        knobPre.value = Store.preamp
         suppress = false
-        highlightPreset()
+        renderPresets()
         refreshLabels()
         refresh()
     }
@@ -434,9 +590,17 @@ class MainActivity : Activity() {
     private fun refreshLabels() {
         tvStrength.text = "Kekuatan koreksi: ${Store.strength}%"
         tvLimit.text = "Batas koreksi per band: ±${Store.limit} dB"
-        tvTarget.text = "Target: " + if (Store.target != null) "dikunci dari \"${Store.targetName ?: "lagu referensi"}\"" else "Netral (bawaan)"
-        tvPre.text = sgn(Store.preamp)
-        for (i in 0 until 10) gainVals[i]?.text = sgn(Store.gains[i])
+        tvTarget.text = "Target: " + if (Store.target != null) "dikunci dari ${Store.targetName ?: "lagu referensi"}" else "Netral (bawaan)"
+        tvBalance.text = "Balance: " + when {
+            Store.balance == 0 -> "tengah"
+            Store.balance < 0 -> "kiri ${-Store.balance}%"
+            else -> "kanan ${Store.balance}%"
+        }
+        tvVirt.text = "Stereo luas (Virtualizer): ${Store.virtualizer / 10}%"
+        btnReverb.text = REVERBS[Store.reverb.coerceIn(0, REVERBS.size - 1)]
+        tvLimTh.text = "Ambang limiter: ${sgn(Store.limiterThreshold)} dB"
+        sbLimTh.isEnabled = Store.limiterOn
+        for ((o, b) in deviceButtons) b.text = Store.devicePresets[o] ?: "Pilih preset"
     }
 
     private fun avg(a: FloatArray, i: Int, j: Int): Float {
@@ -454,15 +618,14 @@ class MainActivity : Activity() {
 
         tvSessions.text = when {
             !running -> "Mati. Nyalakan untuk mulai."
-            AppState.sessions.isEmpty() -> "Menunggu aplikasi musik… Putar lagu di YouTube Music. Jika tidak muncul, hentikan lalu putar ulang lagunya."
+            AppState.sessions.isEmpty() -> "Menunggu aplikasi musik… Nyalakan Mode global di bawah jika YouTube Music tidak terdeteksi."
             else -> "Terhubung ke: " + AppState.sessions.distinct().joinToString(", ")
         }
+        tvOutput.text = "Keluaran: " + Outputs.label(AppState.output) +
+            (if (Store.autoDevice) Store.devicePresets[AppState.output]?.let { " → $it" } ?: "" else "")
         val err = listOfNotNull(AppState.dpError, if (running) AppState.vizError else null)
         tvError.text = err.joinToString("\n")
         tvError.visibility = if (err.isEmpty()) View.GONE else View.VISIBLE
-
-        tvTitle.text = AppState.title?.let { "♪ $it" } ?: ""
-        tvTitle.visibility = if (AppState.title == null) View.GONE else View.VISIBLE
 
         val frames = AppState.frames
         val prog = (frames * 100 / Adaptive.FULL).coerceAtMost(100)
@@ -470,26 +633,25 @@ class MainActivity : Activity() {
         btnLock.isEnabled = running && frames >= Adaptive.FULL * 6 / 10
         btnLock.alpha = if (btnLock.isEnabled) 1f else 0.45f
 
-        val C = AppState.corr
-        val active = running && Store.adaptiveOn && frames >= Adaptive.READY
-        val b = avg(C, 0, 2); val m = avg(C, 3, 6); val t = avg(C, 7, 9)
+        val c = AppState.corr
+        val active = running && Store.adaptiveOn && frames >= Adaptive.READY && AppState.sessions.isNotEmpty()
+        val b = avg(c, 0, 2); val m = avg(c, 3, 6); val t = avg(c, 7, 9)
         tvBass.text = if (active) sgn(b) else "–"
         tvMid.text = if (active) sgn(m) else "–"
         tvTreble.text = if (active) sgn(t) else "–"
-        for (i in 0 until 10) corrVals[i]?.text = if (active && abs(C[i]) >= 0.3f) sgn(C[i]) else ""
 
         tvStatus.text = when {
             !running -> "Nyalakan Equalizer terlebih dahulu."
-            AppState.sessions.isEmpty() && frames >= Adaptive.READY ->
-                "Musik terdeteksi, tapi EQ belum terhubung ke aplikasi musiknya, jadi koreksi belum diterapkan. Paksa berhenti YouTube Music lalu buka lagi, atau nyalakan Mode legacy di bawah."
             frames == 0 -> "Putar musik untuk mulai menganalisis."
+            AppState.sessions.isEmpty() && frames >= Adaptive.READY ->
+                "Musik terdeteksi, tapi EQ belum terhubung ke aplikasi musik. Nyalakan Mode global di Pengaturan lanjutan."
             frames < Adaptive.READY -> "Menganalisis karakter lagu… $prog%"
             !Store.adaptiveOn -> {
                 val sh = svc!!.adaptive.shape()
                 val tg = Store.target ?: Adaptive.DEFAULT_TARGET
                 val db = avg(sh, 0, 2) - avg(tg, 0, 2)
                 val dt = avg(sh, 7, 9) - avg(tg, 7, 9)
-                "Lagu ini dibanding target: bass ${sgn(db)} dB, treble ${sgn(dt)} dB. Nyalakan Auto-seimbang untuk menyesuaikan."
+                "Lagu ini dibanding target: bass ${sgn(db)} dB, treble ${sgn(dt)} dB. Nyalakan AI untuk menyesuaikan otomatis."
             }
             else -> {
                 val parts = mutableListOf<String>()
@@ -500,6 +662,10 @@ class MainActivity : Activity() {
                     (if (prog < 100) " (masih menyesuaikan…)" else "")
             }
         }
+        if (!running) AppState.spectrum.fill(0f)
+        // Preset bisa berubah dari widget/notifikasi/perangkat
+        if (presetButtons.isNotEmpty()) highlightPreset()
+        updateCurve()
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()

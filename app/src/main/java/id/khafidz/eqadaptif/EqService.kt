@@ -11,21 +11,28 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.media.AudioPlaybackConfiguration
 import android.media.audiofx.AudioEffect
-import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Visualizer
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import kotlin.math.abs
+import kotlin.math.ln
+import kotlin.math.log10
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
  * Service latar depan yang:
- *  1. memasang DynamicsProcessing (EQ 10 band + limiter) ke sesi audio aplikasi musik,
- *  2. menganalisis spektrum keluaran lewat Visualizer,
- *  3. menghitung koreksi Auto-seimbang setiap 250 ms.
+ *  1. memasang efek (EQ, preamp, balance, limiter, virtualizer, reverb) ke sesi audio aplikasi musik,
+ *  2. menganalisis spektrum keluaran lewat Visualizer (untuk tampilan & AI Auto-seimbang),
+ *  3. mengganti preset otomatis sesuai perangkat keluaran,
+ *  4. menghitung koreksi AI Auto-seimbang setiap 250 ms.
  */
 class EqService : Service() {
 
@@ -34,6 +41,9 @@ class EqService : Service() {
             private set
         private const val CHANNEL = "eq"
         private const val NOTIF_ID = 1
+        const val ACTION_NEXT = "id.khafidz.eqadaptif.NEXT_PRESET"
+        const val ACTION_PREV = "id.khafidz.eqadaptif.PREV_PRESET"
+        const val ACTION_STOP = "id.khafidz.eqadaptif.STOP"
 
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, EqService::class.java))
@@ -45,16 +55,16 @@ class EqService : Service() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private val effects = HashMap<Int, DynamicsProcessing>()
+    private val fx = HashMap<Int, SessionFx>()
     private var viz: Visualizer? = null
     val adaptive = Adaptive()
 
     private var lastApplied: FloatArray? = null
-    private var lastPre = Float.NaN
     private var legacyFailed = false
+    private var lastNotifPreset: String? = null
 
     private val receiver = SessionReceiver()
-    private val currentTitle: String? = null
+    private lateinit var am: AudioManager
 
     private val tick = object : Runnable {
         override fun run() {
@@ -63,57 +73,90 @@ class EqService : Service() {
         }
     }
 
+    // ---------------- Lifecycle ----------------
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         Store.init(this)
         instance = this
+        am = getSystemService(AudioManager::class.java)
         goForeground()
         registerSessionReceiver()
         Sessions.open.keys.toList().forEach { attach(it) }
         startVisualizer()
+        am.registerAudioDeviceCallback(deviceCallback, handler)
+        am.registerAudioPlaybackCallback(playbackCallback, handler)
+        scanPlayback(am.activePlaybackConfigurations)
+        onOutputChanged(false)
         handler.post(tick)
+        EqWidget.updateAll(this)
+        EqTile.refresh(this)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_NEXT -> { Store.cyclePreset(1); forceApply() }
+            ACTION_PREV -> { Store.cyclePreset(-1); forceApply() }
+            ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
+        }
+        return START_STICKY
+    }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(receiver) } catch (_: Exception) {}
-        effects.values.forEach { dp ->
-            try { dp.setEnabled(false); dp.release() } catch (_: Exception) {}
-        }
-        effects.clear()
+        try { am.unregisterAudioDeviceCallback(deviceCallback) } catch (_: Exception) {}
+        try { am.unregisterAudioPlaybackCallback(playbackCallback) } catch (_: Exception) {}
+        fx.values.forEach { it.release() }
+        fx.clear()
         try { viz?.setEnabled(false); viz?.release() } catch (_: Exception) {}
         viz = null
         instance = null
         AppState.sessions = emptyList()
         AppState.frames = 0
+        AppState.spectrum.fill(0f)
         AppState.changed()
+        EqWidget.updateAll(this)
+        EqTile.refresh(this)
         super.onDestroy()
     }
 
-    // ---------------- Foreground ----------------
+    // ---------------- Foreground & notifikasi ----------------
 
     private fun hasMic(): Boolean =
         checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun buildNotification(): Notification {
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
+        fun svc(action: String, code: Int) = PendingIntent.getService(
+            this, code, Intent(this, EqService::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val preset = Store.presetName ?: "Kustom"
+        val ai = if (Store.adaptiveOn) " · AI aktif" else ""
+        return Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_notif)
+            .setContentTitle("EQ Adaptif: $preset")
+            .setContentText("Equalizer berjalan$ai")
+            .setContentIntent(open)
+            .setOngoing(true)
+            .addAction(Notification.Action.Builder(null, "◀ Preset", svc(ACTION_PREV, 1)).build())
+            .addAction(Notification.Action.Builder(null, "Preset ▶", svc(ACTION_NEXT, 2)).build())
+            .addAction(Notification.Action.Builder(null, "Matikan", svc(ACTION_STOP, 3)).build())
+            .build()
+    }
 
     private fun goForeground() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL, "Equalizer", NotificationManager.IMPORTANCE_LOW)
         )
-        val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
-        )
-        val n: Notification = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_notif)
-            .setContentTitle("EQ Adaptif aktif")
-            .setContentText("Equalizer berjalan untuk aplikasi musik")
-            .setContentIntent(pi)
-            .setOngoing(true)
-            .build()
+        val n = buildNotification()
+        lastNotifPreset = Store.presetName
         val mic = hasMic()
         try {
             when {
@@ -135,6 +178,13 @@ class EqService : Service() {
         }
     }
 
+    private fun updateNotification() {
+        lastNotifPreset = Store.presetName
+        try {
+            getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification())
+        } catch (_: Exception) {}
+    }
+
     private fun registerSessionReceiver() {
         val f = IntentFilter().apply {
             addAction(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION)
@@ -147,26 +197,18 @@ class EqService : Service() {
         }
     }
 
-    // ---------------- Efek EQ ----------------
+    // ---------------- Efek per sesi ----------------
+
+    /** Mode global aktif dan berhasil: efek per sesi tidak dipasang supaya EQ tidak berlipat. */
+    private fun globalActive(): Boolean = Store.legacy && !legacyFailed
 
     fun attach(sid: Int) {
-        if (effects.containsKey(sid)) return
+        if (fx.containsKey(sid)) return
+        if (sid != 0 && globalActive()) { publishSessions(); return }
         try {
-            val cfg = DynamicsProcessing.Config.Builder(
-                DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
-                2,          // stereo
-                true, 10,   // pre-EQ 10 band
-                false, 0,   // multiband compressor: tidak dipakai
-                false, 0,   // post-EQ: tidak dipakai
-                true        // limiter: mencegah suara pecah
-            ).build()
-            val dp = DynamicsProcessing(Int.MAX_VALUE, sid, cfg)
-            dp.setLimiterAllChannelsTo(
-                DynamicsProcessing.Limiter(true, true, 0, 1f, 60f, 10f, -1f, 0f)
-            )
-            effects[sid] = dp
-            applyGains(true)
-            dp.setEnabled(true)
+            val s = SessionFx(sid)
+            fx[sid] = s
+            s.apply(currentParams(), true)
             AppState.dpError = null
         } catch (e: Exception) {
             if (sid == 0) legacyFailed = true
@@ -176,45 +218,117 @@ class EqService : Service() {
     }
 
     fun detach(sid: Int) {
-        effects.remove(sid)?.let { dp ->
-            try { dp.setEnabled(false); dp.release() } catch (_: Exception) {}
-        }
+        fx.remove(sid)?.release()
         publishSessions()
     }
 
     private fun publishSessions() {
-        AppState.sessions = effects.keys.sorted().map { sid ->
-            if (sid == 0) "Global (mode legacy)" else Sessions.friendly(Sessions.open[sid])
+        AppState.sessions = fx.keys.sorted().map { sid ->
+            if (sid == 0) "Semua aplikasi (mode global)" else Sessions.friendly(Sessions.open[sid])
         }
         AppState.changed()
     }
 
-    private fun applyGains(force: Boolean = false) {
+    private fun currentParams(): FxParams {
         val corrOn = Store.adaptiveOn
-        val g = FloatArray(10) { Store.gains[it] + if (corrOn) adaptive.C[it] else 0f }
+        val user = Store.userCurve()
+        val g = FloatArray(Bands.N) { (user[it] + if (corrOn) adaptive.C[it] else 0f).coerceIn(-15f, 15f) }
         val boost = if (corrOn) (adaptive.C.maxOrNull() ?: 0f).coerceAtLeast(0f) else 0f
-        val pre = Store.preamp - boost * 0.5f // ruang ekstra saat koreksi menaikkan band
+        val toneBoost = maxOf(Store.bass, Store.treble, 0f) * 0.5f
+        lastApplied = g
+        return FxParams(
+            gains = g,
+            preamp = Store.preamp - boost * 0.5f - toneBoost,
+            balance = Store.balance,
+            limiterOn = Store.limiterOn,
+            limiterThreshold = Store.limiterThreshold,
+            virtualizer = Store.virtualizer,
+            reverb = Store.reverb
+        )
+    }
 
-        val last = lastApplied
-        val changed = force || last == null || g.indices.any { abs(g[it] - last[it]) > 0.05f }
-        if (changed) {
-            for (dp in effects.values) {
-                for (i in 0 until 10) {
-                    try {
-                        dp.setPreEqBandAllChannelsTo(
-                            i, DynamicsProcessing.EqBand(true, Bands.upperEdge(i), g[i])
-                        )
-                    } catch (_: Exception) {}
+    /** Dipanggil setelah pengaturan berubah dari layar, widget, atau notifikasi. */
+    fun forceApply() {
+        val p = currentParams()
+        fx.values.forEach { it.apply(p, false) }
+        if (Store.presetName != lastNotifPreset) updateNotification()
+        EqWidget.updateAll(this)
+        AppState.changed()
+    }
+
+    // ---------------- Deteksi pemutaran (cara kedua) ----------------
+
+    /**
+     * Sebagian aplikasi tidak selalu mengumumkan sesi audionya. Android memberi tahu setiap kali
+     * ada pemutaran; di banyak HP nomor sesinya bisa dibaca, sehingga EQ bisa langsung menempel.
+     */
+    private val playbackCallback = object : AudioManager.AudioPlaybackCallback() {
+        override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
+            scanPlayback(configs)
+        }
+    }
+
+    private fun scanPlayback(configs: List<AudioPlaybackConfiguration>?) {
+        configs ?: return
+        for (c in configs) {
+            try {
+                val usage = c.audioAttributes.usage
+                if (usage != AudioAttributes.USAGE_MEDIA && usage != AudioAttributes.USAGE_GAME &&
+                    usage != AudioAttributes.USAGE_UNKNOWN) continue
+                val sid = hiddenInt(c, "getSessionId")
+                if (sid == null || sid <= 0 || fx.containsKey(sid)) continue
+                if (!Sessions.open.containsKey(sid)) {
+                    val uid = hiddenInt(c, "getClientUid")
+                    val pkg = uid?.let { packageManager.getPackagesForUid(it)?.firstOrNull() }
+                    if (pkg == packageName) continue
+                    Sessions.open[sid] = pkg ?: "?"
                 }
-            }
-            lastApplied = g
+                attach(sid)
+            } catch (_: Exception) {}
         }
-        if (force || lastPre.isNaN() || abs(pre - lastPre) > 0.05f) {
-            for (dp in effects.values) {
-                try { dp.setInputGainAllChannelsTo(pre) } catch (_: Exception) {}
-            }
-            lastPre = pre
+    }
+
+    private fun hiddenInt(o: Any, method: String): Int? = try {
+        o.javaClass.getMethod(method).invoke(o) as? Int
+    } catch (_: Throwable) {
+        null
+    }
+
+    // ---------------- Perangkat keluaran ----------------
+
+    private val deviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) { onOutputChanged(true) }
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) { onOutputChanged(true) }
+    }
+
+    private fun detectOutput(): String {
+        val outs = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        val types = outs.map { it.type }.toSet()
+        val wired = setOf(
+            AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_DEVICE
+        )
+        val bt = mutableSetOf(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)
+        if (Build.VERSION.SDK_INT >= 31) {
+            bt.add(AudioDeviceInfo.TYPE_BLE_HEADSET)
+            bt.add(AudioDeviceInfo.TYPE_BLE_SPEAKER)
         }
+        return when {
+            types.any { it in wired } -> Outputs.WIRED
+            types.any { it in bt } -> Outputs.BT
+            else -> Outputs.SPEAKER
+        }
+    }
+
+    private fun onOutputChanged(announce: Boolean) {
+        val o = detectOutput()
+        val changed = o != AppState.output
+        AppState.output = o
+        if (Store.autoDevice && (changed || !announce)) {
+            val name = Store.devicePresets[o]
+            if (name != null && name != Store.presetName && Store.applyPreset(name)) forceApply()
+        }
+        AppState.changed()
     }
 
     // ---------------- Analisis ----------------
@@ -222,7 +336,7 @@ class EqService : Service() {
     private fun startVisualizer() {
         if (viz != null) return
         if (!hasMic()) {
-            AppState.vizError = "Izin \"Rekam audio\" belum diberikan, jadi Auto-seimbang tidak bisa menganalisis musik. EQ manual tetap jalan."
+            AppState.vizError = "Izin \"Rekam audio\" belum diberikan, jadi spektrum dan AI Auto-seimbang tidak aktif. EQ tetap jalan."
             return
         }
         try {
@@ -241,42 +355,74 @@ class EqService : Service() {
             viz = v
             AppState.vizError = null
         } catch (e: Exception) {
-            AppState.vizError = "Penganalisis audio tidak tersedia di HP ini (${e.message ?: e.javaClass.simpleName}). EQ manual tetap jalan."
+            AppState.vizError = "Penganalisis audio tidak tersedia di HP ini (${e.message ?: e.javaClass.simpleName}). EQ tetap jalan."
         }
     }
 
     private fun onFft(fft: ByteArray, srHz: Float) {
+        updateSpectrum(fft, srHz)
         val p = Adaptive.bandPowers(fft, srHz)
-        // Visualizer mendengar suara SETELAH EQ; kurangi EQ yang sedang dipasang agar didapat karakter asli lagu.
-        val applied = if (effects.isEmpty()) null else lastApplied
+        // Visualizer mendengar suara SETELAH EQ; kurangi EQ yang dipasang agar didapat karakter asli lagu.
+        val applied = if (fx.isEmpty()) null else lastApplied
         if (applied != null) {
-            for (i in 0 until 10) p[i] = p[i] / 10.0.pow(applied[i] / 10.0)
+            for (i in 0 until Bands.N) p[i] = p[i] / 10.0.pow(applied[i] / 10.0)
         }
         adaptive.addFrame(p)
     }
 
+    private fun updateSpectrum(fft: ByteArray, srHz: Float) {
+        val n = fft.size
+        val bins = n / 2
+        val binHz = srHz / n
+        val s = AppState.spectrum
+        val lnMin = ln(20.0)
+        val lnMax = ln(20000.0)
+        for (b in 0 until AppState.SPEC_BINS) {
+            val f0 = kotlin.math.exp(lnMin + (lnMax - lnMin) * b / AppState.SPEC_BINS)
+            val f1 = kotlin.math.exp(lnMin + (lnMax - lnMin) * (b + 1) / AppState.SPEC_BINS)
+            val k0 = (f0 / binHz).toInt().coerceIn(1, bins - 1)
+            val k1 = (f1 / binHz).toInt().coerceIn(k0, bins - 1)
+            var m = 0.0
+            for (k in k0..k1) {
+                val re = fft[2 * k].toDouble()
+                val im = fft[2 * k + 1].toDouble()
+                m = maxOf(m, sqrt(re * re + im * im))
+            }
+            val db = 20 * log10(m + 1e-3)                    // ~0..45 dB untuk FFT 8-bit
+            val v = (db / 42.0).coerceIn(0.0, 1.0).toFloat()
+            s[b] = if (v > s[b]) v else s[b] * 0.82f + v * 0.18f // naik cepat, turun pelan
+        }
+        AppState.spectrumListener?.invoke()
+    }
+
     private fun step() {
-        if (Store.legacy && !effects.containsKey(0) && !legacyFailed) attach(0)
+        if (globalActive()) {
+            if (!fx.containsKey(0)) attach(0)
+            fx.keys.filter { it != 0 }.forEach { detach(it) }
+        }
         if (!Store.legacy) {
             legacyFailed = false
-            if (effects.containsKey(0)) detach(0)
+            if (fx.containsKey(0)) detach(0)
+            Sessions.open.keys.filter { !fx.containsKey(it) }.forEach { attach(it) }
         }
         if (viz == null && hasMic()) startVisualizer()
+        if (fx.isEmpty() && !Store.legacy) scanPlayback(am.activePlaybackConfigurations)
 
         adaptive.update(Store.target ?: Adaptive.DEFAULT_TARGET, Store.strength, Store.limit)
-        applyGains()
+        val p = currentParams()
+        fx.values.forEach { it.apply(p) }
+        if (Store.presetName != lastNotifPreset) updateNotification()
 
         AppState.corr = adaptive.C.copyOf()
         AppState.frames = adaptive.frames
-        AppState.title = currentTitle
         AppState.changed()
     }
 
-    /** Kunci karakter suara lagu yang sedang diputar sebagai target. */
+    /** Kunci karakter suara lagu yang sedang diputar sebagai target AI. */
     fun lockTarget(): Boolean {
         if (adaptive.frames < Adaptive.FULL * 6 / 10) return false
         Store.target = adaptive.makeTarget(Store.adaptiveOn)
-        Store.targetName = currentTitle ?: "lagu yang sedang diputar"
+        Store.targetName = "lagu referensi"
         Store.save()
         return true
     }

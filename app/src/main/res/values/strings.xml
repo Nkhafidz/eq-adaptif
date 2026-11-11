@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">EQ Adaptif</string>
+    <string name="widget_desc">Ganti preset dan nyalakan/matikan EQ dari layar utama</string>
 </resources>
