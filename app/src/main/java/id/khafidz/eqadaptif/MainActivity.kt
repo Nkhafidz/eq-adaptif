@@ -59,6 +59,9 @@ class MainActivity : Activity() {
 
     // Status
     private lateinit var swRun: Switch
+    private lateinit var swCompanion: Switch
+    private lateinit var tvCompanion: TextView
+    private val eqCards = ArrayList<View>()
     private lateinit var tvSessions: TextView
     private lateinit var tvOutput: TextView
     private lateinit var tvError: TextView
@@ -297,9 +300,25 @@ class MainActivity : Activity() {
         st.addView(tvOutput)
         tvError = tv("", 12.5f, 0xFFFF6B6B.toInt())
         st.addView(tvError)
+        gap(st, 10)
+        swCompanion = sw("Mode Pendamping (pakai EQ lain + AI)", cViolet) { on ->
+            Store.companion = on
+            if (on) Store.adaptiveOn = true
+            commit(); refreshAll()
+            toast(if (on) "EQ Adaptif hanya menambah koreksi AI. Atur suara di EQ pilihan Anda." else "EQ Adaptif kembali memakai EQ sendiri")
+        }
+        st.addView(swCompanion)
+        tvCompanion = tv(
+            "Untuk dipakai bersama Poweramp Equalizer, Wavelet, atau EQ lain. EQ, Nada, Efek, dan DVC milik EQ Adaptif dimatikan; " +
+            "AI hanya menambahkan koreksi kecil per lagu. Cara pakai: atur suara di EQ pilihan Anda → putar lagu yang sudah pas → " +
+            "\"Kunci karakter lagu ini\" di kartu AI → lagu berikutnya otomatis disesuaikan.",
+            11.5f, cMuted
+        )
+        st.addView(tvCompanion)
 
         // ===== Equalizer grafis =====
         val eq = card(root, "Equalizer")
+        eqCards.add(eq)
         curve = EqCurveView(this)
         curve.onBandChange = { i, v ->
             Store.gains[i] = v
@@ -356,6 +375,7 @@ class MainActivity : Activity() {
 
         // ===== Nada (kenop) =====
         val tone = card(root, "Nada")
+        eqCards.add(tone)
         val knobs = hrow()
         knobBass = KnobView(this, "BASS", -12f, 12f, cAccent)
         knobTreble = KnobView(this, "TREBLE", -12f, 12f, cAccent)
@@ -442,6 +462,7 @@ class MainActivity : Activity() {
 
         // ===== Efek =====
         val fxc = card(root, "Efek")
+        eqCards.add(fxc)
         tvBalance = tv("", 13f, cMuted)
         fxc.addView(tvBalance)
         sbBalance = seek(200, cTeal) { p -> Store.balance = p - 100; EqService.instance?.forceApply(); commitLater(); refreshLabels() }
@@ -498,6 +519,7 @@ class MainActivity : Activity() {
 
         // ===== Perangkat =====
         val dev = card(root, "Preset per perangkat")
+        eqCards.add(dev)
         swAutoDevice = sw("Ganti preset otomatis") { on ->
             Store.autoDevice = on; commit()
             toast(if (on) "Preset akan berganti sesuai perangkat" else "Ganti otomatis mati")
@@ -887,6 +909,8 @@ class MainActivity : Activity() {
         swRun.isChecked = running
         swBypass.isChecked = svc?.bypass ?: false
         swDvc.isChecked = Store.dvcOn
+        swCompanion.isChecked = Store.companion
+        for (c in eqCards) c.alpha = if (Store.companion) 0.35f else 1f
         suppress = false
 
         tvSessions.text = when {

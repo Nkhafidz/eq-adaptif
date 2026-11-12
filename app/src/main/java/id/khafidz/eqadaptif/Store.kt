@@ -235,6 +235,8 @@ object Store {
     val devicePresets = HashMap<String, String>()
 
     var legacy = true
+    /** Mode Pendamping: EQ sendiri mati, AI hanya menambah koreksi di atas EQ lain (Poweramp Equalizer, dll). */
+    var companion = false
 
     fun init(ctx: Context) {
         AutoEq.init(ctx)
@@ -299,6 +301,7 @@ object Store {
             }
         } catch (_: Exception) {}
         legacy = p.getBoolean("legacy", true)
+        companion = p.getBoolean("companion", false)
     }
 
     fun save() {
@@ -336,6 +339,7 @@ object Store {
             ?.putBoolean("autoDevice", autoDevice)
             ?.putString("devicePresets", dp.toString())
             ?.putBoolean("legacy", legacy)
+            ?.putBoolean("companion", companion)
             ?.apply()
         val e = sp?.edit() ?: return
         for ((k, v) in dvcSteps) e.putInt("dvc_$k", v)

@@ -67,6 +67,9 @@ class EqService : Service() {
         }
 
     private var lastApplied: FloatArray? = null
+    private var companionFx: CompanionFx? = null
+    var companionError: String? = null
+        private set
     private var legacyFailed = false
     private var lastNotifPreset: String? = null
 
@@ -120,6 +123,8 @@ class EqService : Service() {
         try { am.unregisterAudioPlaybackCallback(playbackCallback) } catch (_: Exception) {}
         fx.values.forEach { it.release() }
         fx.clear()
+        companionFx?.release()
+        companionFx = null
         try { viz?.setEnabled(false); viz?.release() } catch (_: Exception) {}
         viz = null
         instance = null
@@ -212,6 +217,7 @@ class EqService : Service() {
     private fun globalActive(): Boolean = Store.legacy && !legacyFailed
 
     fun attach(sid: Int) {
+        if (Store.companion) { publishSessions(); return }
         if (fx.containsKey(sid)) return
         if (sid != 0 && globalActive()) { publishSessions(); return }
         try {
@@ -234,6 +240,12 @@ class EqService : Service() {
     }
 
     private fun publishSessions() {
+        if (Store.companion) {
+            AppState.sessions = if (companionFx != null)
+                listOf("Mode Pendamping: koreksi AI di atas EQ lain (${companionFx?.bandCount} band)") else emptyList()
+            AppState.changed()
+            return
+        }
         AppState.sessions = fx.keys.sorted().map { sid ->
             if (sid == 0) "Semua aplikasi (mode global)" else Sessions.friendly(Sessions.open[sid])
         }
@@ -398,7 +410,7 @@ class EqService : Service() {
         updateSpectrum(fft, srHz)
         val p = Adaptive.bandPowers(fft, srHz)
         // Visualizer mendengar suara SETELAH EQ; kurangi EQ yang dipasang agar didapat karakter asli lagu.
-        val applied = if (fx.isEmpty()) null else lastApplied?.let { Bands.resample(it, Bands.F10) }
+        val applied = companionFx?.applied10 ?: if (fx.isEmpty()) null else lastApplied?.let { Bands.resample(it, Bands.F10) }
         if (applied != null) {
             for (i in 0 until 10) p[i] = p[i] / 10.0.pow(applied[i] / 10.0)
         }
@@ -431,6 +443,8 @@ class EqService : Service() {
     }
 
     private fun step() {
+        if (Store.companion) { companionStep(); return }
+        if (companionFx != null) { companionFx?.release(); companionFx = null; companionError = null }
         if (globalActive()) {
             if (!fx.containsKey(0)) attach(0)
             fx.keys.filter { it != 0 }.forEach { detach(it) }
@@ -451,6 +465,38 @@ class EqService : Service() {
         fx.values.forEach { it.apply(p) }
         if (Store.presetName != lastNotifPreset) updateNotification()
 
+        AppState.corr = adaptive.C.copyOf()
+        AppState.frames = adaptive.frames
+        AppState.changed()
+    }
+
+    // ---------------- Mode Pendamping ----------------
+
+    private fun companionStep() {
+        // EQ sendiri dilepas (DVC dikembalikan dulu supaya volume aman)
+        if (fx.isNotEmpty()) {
+            dvcStop()
+            fx.keys.toList().forEach { sid -> fx.remove(sid)?.release() }
+            lastApplied = null
+            publishSessions()
+        }
+        if (viz == null && hasMic()) startVisualizer()
+        if (companionFx == null) {
+            try {
+                companionFx = CompanionFx()
+                companionError = null
+            } catch (e: Exception) {
+                companionError = "Equalizer dasar Android tidak tersedia di HP ini: ${e.message ?: e.javaClass.simpleName}"
+            }
+            publishSessions()
+        }
+        adaptive.update(Store.target ?: Adaptive.DEFAULT_TARGET, Store.strength, Store.limit)
+        val c = companionFx
+        if (c != null) {
+            c.apply(if (Store.adaptiveOn) adaptive.C else FloatArray(10))
+            if (!c.hasControl) companionError = "Koreksi AI sedang dikendalikan aplikasi lain (EQ lain memakai jenis efek yang sama)."
+        }
+        AppState.dpError = companionError
         AppState.corr = adaptive.C.copyOf()
         AppState.frames = adaptive.frames
         AppState.changed()
