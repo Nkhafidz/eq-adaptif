@@ -60,14 +60,18 @@ class SessionFx(val sid: Int, val bandCount: Int) {
             }
         }
         // Preamp + balance
-        if (force || l == null || abs(p.loudBoost - l.loudBoost) > 0.05f) applyLoudness(p.loudBoost)
+        // Penguatan positif (preamp > 0, kompensasi, DVC) lewat LoudnessEnhancer yang punya pengaman distorsi.
+        // DynamicsProcessing hanya boleh menurunkan level, karena penguatan di sana membuat suara pecah.
+        val boost = (p.loudBoost + p.preamp.coerceAtLeast(0f)).coerceIn(0f, 18f)
+        val lBoost = l?.let { (it.loudBoost + it.preamp.coerceAtLeast(0f)).coerceIn(0f, 18f) }
+        if (force || lBoost == null || abs(boost - lBoost) > 0.05f) applyLoudness(boost)
         if (force || l == null || abs(p.preamp - l.preamp) > 0.05f || p.balance != l.balance ||
-            abs(p.loudBoost - l.loudBoost) > 0.05f) {
+            lBoost == null || abs(boost - lBoost) > 0.05f) {
             val b = p.balance / 100f
             val left = if (b > 0) 20f * log10((1f - b).coerceAtLeast(0.01f)) else 0f
             val right = if (b < 0) 20f * log10((1f + b).coerceAtLeast(0.01f)) else 0f
-            // Jika LoudnessEnhancer tidak tersedia di HP ini, penguat dipindah ke preamp (limiter menjaga puncak).
-            val pre = p.preamp + if (loudFailed) p.loudBoost else 0f
+            // Jika LoudnessEnhancer tidak tersedia di HP ini, terpaksa lewat preamp (limiter menjaga puncak).
+            val pre = p.preamp.coerceAtMost(0f) + if (loudFailed) boost else 0f
             try {
                 dp.setInputGainbyChannel(0, pre + left)
                 dp.setInputGainbyChannel(1, pre + right)
@@ -81,7 +85,7 @@ class SessionFx(val sid: Int, val bandCount: Int) {
         if (force || l == null || p.limiterOn != l.limiterOn || abs(p.limiterThreshold - l.limiterThreshold) > 0.05f) {
             try {
                 dp.setLimiterAllChannelsTo(
-                    DynamicsProcessing.Limiter(true, p.limiterOn, 0, 1f, 60f, 10f, p.limiterThreshold, 0f)
+                    DynamicsProcessing.Limiter(true, p.limiterOn, 0, 0.5f, 80f, 50f, p.limiterThreshold, 0f)
                 )
             } catch (_: Exception) {}
         }
@@ -158,7 +162,10 @@ class SessionFx(val sid: Int, val bandCount: Int) {
         if (b == bypassed) return
         bypassed = b
         try { dp.setEnabled(!b) } catch (_: Exception) {}
-        try { loud?.setEnabled(!b && (last?.loudBoost ?: 0f) > 0.05f) } catch (_: Exception) {}
+        try {
+            val lb = last?.let { it.loudBoost + it.preamp.coerceAtLeast(0f) } ?: 0f
+            loud?.setEnabled(!b && lb > 0.05f)
+        } catch (_: Exception) {}
         try { virt?.setEnabled(!b && (last?.virtualizer ?: 0) > 0) } catch (_: Exception) {}
         try { rev?.setEnabled(!b && (last?.reverb ?: 0) > 0) } catch (_: Exception) {}
     }
