@@ -1,70 +1,131 @@
 package id.khafidz.eqadaptif
 
+import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 /**
- * Mode Pendamping: EQ Adaptif tidak memakai EQ sendiri. Hanya koreksi AI kecil yang dipasang,
- * memakai equalizer dasar Android (jenis efek berbeda dari Poweramp Equalizer / Wavelet),
- * sehingga bisa berjalan di atas EQ apa pun yang dipakai pengguna.
+ * Mesin koreksi AI yang berjalan di atas EQ pilihan pengguna (Poweramp Equalizer, dll).
+ *
+ * Mesin utama: DynamicsProcessing dengan jumlah band sesuai pilihan (10/15/31), prioritas rendah
+ * supaya tidak merebut kendali dari EQ lain. Jika tidak tersedia atau kalah prioritas, otomatis
+ * memakai equalizer dasar Android (jumlah band ditentukan HP, biasanya 5).
+ *
+ * Efek hanya dinyalakan jika koreksinya berarti, dan penguat volume ikut menyala bersamaan
+ * untuk mengimbangi turunnya volume saat efek aktif di sebagian HP.
  */
-class CompanionFx {
-    private val eq: Equalizer = Equalizer(0, 0)   // prioritas rendah, sesi global
-    private val bands: Int = eq.numberOfBands.toInt()
-    private val centers: FloatArray = FloatArray(bands) { eq.getCenterFreq(it.toShort()) / 1000f }
-    private val minMb: Int
-    private val maxMb: Int
-    private var last: IntArray? = null
-    private var eqOn = false
+class CompanionFx(private val freqs: FloatArray) {
+    private var dp: DynamicsProcessing? = null
+    private var eq: Equalizer? = null
+    private var eqCenters = FloatArray(0)
+    private var eqMin = -1500
+    private var eqMax = 1500
     private var loud: LoudnessEnhancer? = null
     private var loudFailed = false
     private var lastComp = -1f
+    private var on = false
+    private var last: FloatArray? = null
 
-    /** Apakah efek koreksi sedang aktif (memproses suara). */
-    val active: Boolean get() = eqOn
-
-    /** Koreksi yang benar-benar terpasang, dalam 10 band analisis (F10), untuk dikurangkan saat analisis. */
-    var applied10 = FloatArray(10)
+    /** Koreksi yang benar-benar terpasang, dalam band analisis, untuk dikurangkan saat analisis. */
+    var applied = FloatArray(freqs.size)
         private set
 
+    val active: Boolean get() = on
+
+    val engineName: String
+        get() = when {
+            dp != null -> "${freqs.size} band (mesin detail)"
+            eq != null -> "${eqCenters.size} band (equalizer dasar HP)"
+            else -> "tidak tersedia"
+        }
+
     init {
-        val r = eq.bandLevelRange
-        minMb = r[0].toInt()
-        maxMb = r[1].toInt()
-        eq.setEnabled(false)
+        if (!startDp()) startEq()
     }
 
-    val bandCount: Int get() = bands
-    val hasControl: Boolean get() = try { eq.hasControl() } catch (_: Exception) { false }
-
-    /**
-     * corr10: koreksi AI di 10 band (dB). compDb: penguat volume saat koreksi aktif.
-     * Efek hanya dinyalakan jika koreksinya berarti (>= 0,5 dB), karena di sebagian HP efek yang aktif
-     * menurunkan volume keseluruhan.
-     */
-    fun apply(corr10: FloatArray, compDb: Float) {
-        val g = resampleTo(corr10)
-        val mb = IntArray(bands) { (g[it] * 100).toInt().coerceIn(minMb, maxMb) }
-        val needed = mb.any { kotlin.math.abs(it) >= 50 }
-        if (needed != eqOn) {
-            try { eq.setEnabled(needed) } catch (_: Exception) {}
-            eqOn = needed
-        }
-        setCompensation(if (eqOn) compDb else 0f)
-        val l = last
-        for (i in 0 until bands) {
-            if (l == null || kotlin.math.abs(mb[i] - l[i]) >= 10) {
-                try { eq.setBandLevel(i.toShort(), mb[i].toShort()) } catch (_: Exception) {}
+    private fun startDp(): Boolean {
+        return try {
+            val n = freqs.size
+            val cfg = DynamicsProcessing.Config.Builder(
+                DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+                2, true, n, false, 0, false, 0, true
+            ).build()
+            val d = DynamicsProcessing(0, 0, cfg) // prioritas rendah, sesi global
+            if (!d.hasControl()) { d.release(); return false }
+            for (i in 0 until n) {
+                val edge = if (i == n - 1) 20000f else sqrt(freqs[i] * freqs[i + 1])
+                d.setPreEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, edge, 0f))
             }
+            // limiter menjaga puncak saat koreksi menaikkan band
+            d.setLimiterAllChannelsTo(DynamicsProcessing.Limiter(true, true, 0, 0.5f, 80f, 50f, -0.3f, 0f))
+            d.setEnabled(false)
+            dp = d
+            true
+        } catch (_: Exception) {
+            false
         }
-        last = mb
-        // kembalikan ke 10 band untuk dikurangkan dari analisis
-        val actual = FloatArray(bands) { if (eqOn) mb[it] / 100f else 0f }
-        applied10 = FloatArray(10) { j -> interp(actual, centers, Bands.F10[j]) }
+    }
+
+    private fun startEq() {
+        try {
+            val e = Equalizer(0, 0)
+            val b = e.numberOfBands.toInt()
+            eqCenters = FloatArray(b) { e.getCenterFreq(it.toShort()) / 1000f }
+            val r = e.bandLevelRange
+            eqMin = r[0].toInt(); eqMax = r[1].toInt()
+            e.setEnabled(false)
+            eq = e
+        } catch (_: Exception) {}
+    }
+
+    /** true jika mesin masih memegang kendali (EQ lain bisa mengambil alih). */
+    val hasControl: Boolean
+        get() = try { dp?.hasControl() ?: eq?.hasControl() ?: false } catch (_: Exception) { false }
+
+    /** Mesin detail kalah prioritas (mis. EQ lain memakai jenis efek yang sama): pindah ke equalizer dasar. */
+    fun fallbackIfNeeded() {
+        val d = dp ?: return
+        if (try { d.hasControl() } catch (_: Exception) { false }) return
+        try { d.release() } catch (_: Exception) {}
+        dp = null
+        on = false
+        last = null
+        startEq()
+    }
+
+    fun apply(corr: FloatArray, compDb: Float) {
+        val needed = corr.any { abs(it) >= 0.5f }
+        if (needed != on) {
+            try { dp?.setEnabled(needed); eq?.setEnabled(needed) } catch (_: Exception) {}
+            on = needed
+        }
+        setCompensation(if (on) compDb else 0f)
+
+        val d = dp
+        val e = eq
+        if (d != null) {
+            val l = last
+            for (i in corr.indices) {
+                if (l == null || abs(corr[i] - l[i]) >= 0.1f) {
+                    val edge = if (i == corr.size - 1) 20000f else sqrt(freqs[i] * freqs[i + 1])
+                    try { d.setPreEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, edge, corr[i])) } catch (_: Exception) {}
+                }
+            }
+            last = corr.copyOf()
+            applied = if (on) corr.copyOf() else FloatArray(corr.size)
+        } else if (e != null) {
+            val g = Bands.interp(corr, freqs, eqCenters)
+            val mb = IntArray(g.size) { (g[it] * 100).toInt().coerceIn(eqMin, eqMax) }
+            for (i in mb.indices) try { e.setBandLevel(i.toShort(), mb[i].toShort()) } catch (_: Exception) {}
+            val actual = FloatArray(mb.size) { if (on) mb[it] / 100f else 0f }
+            applied = Bands.interp(actual, eqCenters, freqs)
+        }
     }
 
     private fun setCompensation(db: Float) {
-        if (loudFailed || kotlin.math.abs(db - lastComp) < 0.05f) return
+        if (loudFailed || abs(db - lastComp) < 0.05f) return
         lastComp = db
         try {
             if (db <= 0.05f) {
@@ -79,23 +140,10 @@ class CompanionFx {
         }
     }
 
-    private fun resampleTo(c10: FloatArray): FloatArray =
-        FloatArray(bands) { interp(c10, Bands.F10, centers[it]) }
-
-    private fun interp(v: FloatArray, fr: FloatArray, f: Float): Float {
-        if (v.isEmpty()) return 0f
-        if (f <= fr[0]) return v[0]
-        if (f >= fr[fr.size - 1]) return v[v.size - 1]
-        val lf = kotlin.math.ln(f.toDouble())
-        for (i in 0 until fr.size - 1) {
-            val a = kotlin.math.ln(fr[i].toDouble()); val b = kotlin.math.ln(fr[i + 1].toDouble())
-            if (lf <= b) return (v[i] + (v[i + 1] - v[i]) * ((lf - a) / (b - a))).toFloat()
-        }
-        return v[v.size - 1]
-    }
-
     fun release() {
-        try { eq.setEnabled(false); eq.release() } catch (_: Exception) {}
+        try { dp?.setEnabled(false); dp?.release() } catch (_: Exception) {}
+        try { eq?.setEnabled(false); eq?.release() } catch (_: Exception) {}
         try { loud?.release() } catch (_: Exception) {}
+        dp = null; eq = null; loud = null
     }
 }

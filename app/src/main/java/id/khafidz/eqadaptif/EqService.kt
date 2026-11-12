@@ -48,7 +48,8 @@ class EqService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var viz: Visualizer? = null
     private var fx: CompanionFx? = null
-    val adaptive = Adaptive()
+    var adaptive = Adaptive(Bands.FREQS)
+        private set
     private var lastAiOn: Boolean? = null
 
     private val tick = object : Runnable {
@@ -95,8 +96,8 @@ class EqService : Service() {
         viz = null
         instance = null
         AppState.frames = 0
-        AppState.bands = 0
-        AppState.corr = FloatArray(10)
+        AppState.engine = ""
+        AppState.corr = FloatArray(Store.bands)
         AppState.spectrum.fill(0f)
         AppState.changed()
         EqWidget.updateAll(this)
@@ -159,9 +160,9 @@ class EqService : Service() {
     private fun startCorrection() {
         if (fx != null) return
         try {
-            val f = CompanionFx()
+            val f = CompanionFx(adaptive.freqs)
             fx = f
-            AppState.bands = f.bandCount
+            AppState.engine = f.engineName
             AppState.error = null
         } catch (e: Exception) {
             AppState.error = "Equalizer dasar Android tidak tersedia di HP ini: ${e.message ?: e.javaClass.simpleName}"
@@ -197,10 +198,11 @@ class EqService : Service() {
 
     private fun onFft(fft: ByteArray, srHz: Float) {
         updateSpectrum(fft, srHz)
-        val p = Adaptive.bandPowers(fft, srHz)
+        val ad = adaptive
+        val p = Adaptive.bandPowers(fft, srHz, ad.freqs)
         // Yang terdengar sudah termasuk koreksi AI; kurangi koreksi itu agar didapat karakter asli.
-        fx?.applied10?.let { a -> for (i in 0 until 10) p[i] = p[i] / 10.0.pow(a[i] / 10.0) }
-        adaptive.addFrame(p)
+        fx?.applied?.let { a -> if (a.size == p.size) for (i in p.indices) p[i] = p[i] / 10.0.pow(a[i] / 10.0) }
+        ad.addFrame(p)
     }
 
     private fun updateSpectrum(fft: ByteArray, srHz: Float) {
@@ -229,17 +231,25 @@ class EqService : Service() {
 
     private fun step() {
         if (viz == null && hasMic()) startVisualizer()
+        // ganti detail koreksi (10/15/31 band): analisis & mesin dibuat ulang
+        if (adaptive.n != Store.bands) {
+            fx?.release(); fx = null
+            adaptive = Adaptive(Bands.FREQS)
+        }
         if (fx == null) startCorrection()
-        adaptive.update(Store.target ?: Adaptive.DEFAULT_TARGET, Store.strength, Store.limit)
+        fx?.fallbackIfNeeded()
+        AppState.engine = fx?.engineName ?: ""
+        adaptive.update(Store.target ?: adaptive.defaultTarget, Store.strength, Store.limit)
         val f = fx
         if (f != null) {
-            f.apply(if (Store.aiOn) adaptive.C else FloatArray(10), Store.comp)
+            f.apply(if (Store.aiOn) adaptive.C else FloatArray(adaptive.n), Store.comp)
             AppState.fxActive = f.active
             AppState.error = if (!f.hasControl)
                 "Koreksi AI sedang dikendalikan aplikasi lain (EQ lain memakai jenis efek yang sama)." else null
         }
         if (lastAiOn != Store.aiOn) { lastAiOn = Store.aiOn; updateNotification() }
-        AppState.corr = if (Store.aiOn) adaptive.C.copyOf() else FloatArray(10)
+        AppState.corr = if (Store.aiOn) adaptive.C.copyOf() else FloatArray(adaptive.n)
+        AppState.corrFreqs = adaptive.freqs
         AppState.frames = adaptive.frames
         AppState.changed()
     }

@@ -57,6 +57,7 @@ class MainActivity : Activity() {
     private lateinit var sbLimit: SeekBar
     private lateinit var tvTarget: TextView
     private lateinit var tvComp: TextView
+    private val bandButtons = LinkedHashMap<Int, Button>()
     private lateinit var sbComp: SeekBar
     private lateinit var btnLock: Button
 
@@ -237,6 +238,22 @@ class MainActivity : Activity() {
         tvBass = meter("BASS"); tvMid = meter("MID"); tvTreble = meter("TREBLE")
         ai.addView(meters, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
         gap(ai, 10)
+        val bRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        bRow.addView(tv("Detail koreksi", 13f, cMuted), LinearLayout.LayoutParams(0, wrap, 1f))
+        for (n in listOf(10, 15, 31)) {
+            val b = btn("$n band") {
+                if (Store.bands != n) {
+                    Store.changeBands(n)
+                    toast("Detail koreksi: $n band. Analisis lagu dimulai ulang.")
+                    refreshAll()
+                }
+            }
+            bRow.addView(b, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(6) })
+            bandButtons[n] = b
+        }
+        ai.addView(bRow)
+        ai.addView(tv("Lebih banyak band = koreksi lebih detail. Jika HP tidak mendukung, otomatis memakai equalizer dasar HP (biasanya 5 band).", 11.5f, cMuted))
+        gap(ai, 8)
         tvStrength = tv("", 13f, cMuted); ai.addView(tvStrength)
         sbStrength = seek(100) { p -> Store.strength = p; Store.save(); refreshLabels() }
         ai.addView(sbStrength)
@@ -294,6 +311,13 @@ class MainActivity : Activity() {
         return s / (j - i + 1)
     }
 
+    /** Rata-rata nilai band yang frekuensinya di [lo, hi). */
+    private fun region(v: FloatArray, fr: FloatArray, lo: Float, hi: Float): Float {
+        var s = 0f; var n = 0
+        for (i in v.indices) if (i < fr.size && fr[i] >= lo && fr[i] < hi) { s += v[i]; n++ }
+        return if (n == 0) 0f else s / n
+    }
+
     private fun refreshAll() {
         suppress = true
         swAi.isChecked = Store.aiOn
@@ -308,6 +332,11 @@ class MainActivity : Activity() {
     private fun refreshLabels() {
         tvStrength.text = "Kekuatan koreksi: ${Store.strength}%"
         tvLimit.text = "Batas koreksi per band: ±${Store.limit} dB"
+        for ((n, b) in bandButtons) {
+            val on = Store.bands == n
+            b.background = if (on) rounded(cViolet, cViolet, 9) else rounded(cPanel2, cLine, 9)
+            b.setTextColor(if (on) 0xFF1A1205.toInt() else cText)
+        }
         tvComp.text = "Penguat volume saat koreksi: +${String.format("%.1f", Store.comp)} dB"
         tvTarget.text = "Target: " + if (Store.target != null) "dikunci dari ${Store.targetName ?: "lagu referensi"}" else "Netral (bawaan)"
     }
@@ -322,7 +351,7 @@ class MainActivity : Activity() {
 
         tvState.text = when {
             !running -> "Mati. Nyalakan untuk mulai."
-            AppState.bands > 0 -> "Berjalan · koreksi AI di atas EQ Anda (${AppState.bands} band) · " +
+            AppState.engine.isNotEmpty() -> "Berjalan · koreksi ${AppState.engine} · " +
                 if (AppState.fxActive) "sedang mengoreksi" else "tidak mengoreksi (suara asli)"
             else -> "Berjalan"
         }
@@ -338,11 +367,13 @@ class MainActivity : Activity() {
 
         val c = AppState.corr
         val active = running && Store.aiOn && frames >= Adaptive.READY
-        val b = avg(c, 0, 2); val m = avg(c, 3, 6); val t = avg(c, 7, 9)
+        val fr = AppState.corrFreqs
+        val b = region(c, fr, 0f, 250f); val m = region(c, fr, 250f, 2000f); val t = region(c, fr, 2000f, 99999f)
         tvBass.text = if (active) sgn(b) else "–"
         tvMid.text = if (active) sgn(m) else "–"
         tvTreble.text = if (active) sgn(t) else "–"
-        spectrum.correction = if (active) c.copyOf() else FloatArray(10)
+        spectrum.freqs = fr
+        spectrum.correction = if (active && c.size == fr.size) c.copyOf() else FloatArray(fr.size)
         if (!running) AppState.spectrum.fill(0f)
         spectrum.invalidate()
 
@@ -352,8 +383,10 @@ class MainActivity : Activity() {
             frames < Adaptive.READY -> "Menganalisis karakter lagu… $prog%"
             !Store.aiOn -> {
                 val sh = svc!!.adaptive.shape()
-                val tg = Store.target ?: Adaptive.DEFAULT_TARGET
-                "AI dijeda. Lagu ini dibanding target: bass ${sgn(avg(sh, 0, 2) - avg(tg, 0, 2))} dB, treble ${sgn(avg(sh, 7, 9) - avg(tg, 7, 9))} dB."
+                val tg = Store.target?.takeIf { it.size == sh.size } ?: svc.adaptive.defaultTarget
+                val fr = svc.adaptive.freqs
+                "AI dijeda. Lagu ini dibanding target: bass ${sgn(region(sh, fr, 0f, 250f) - region(tg, fr, 0f, 250f))} dB, " +
+                    "treble ${sgn(region(sh, fr, 2000f, 99999f) - region(tg, fr, 2000f, 99999f))} dB."
             }
             else -> {
                 val parts = mutableListOf<String>()

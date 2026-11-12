@@ -10,6 +10,7 @@ import kotlin.math.ln
 /** Spektrum musik yang sedang diputar + garis koreksi AI (ungu). */
 class SpectrumView(ctx: Context) : View(ctx) {
     var correction = FloatArray(10)
+    var freqs = Bands.F10
 
     private val d = resources.displayMetrics.density
     private val range = 10f
@@ -41,7 +42,8 @@ class SpectrumView(ctx: Context) : View(ctx) {
             c.drawText((if (db > 0) "+" else "") + db, 2 * d, y(db.toFloat()) + 4 * d, pLabel)
         }
         pLabel.textAlign = Paint.Align.CENTER
-        for (i in Bands.F10.indices) if (i % 2 == 0 || i == 9) c.drawText(Bands.L10[i], xf(Bands.F10[i]), h - 5 * d, pLabel)
+        for (f in floatArrayOf(31f, 63f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f).filterIndexed { i, _ -> i % 2 == 0 || i == 9 })
+            c.drawText(Bands.label(f), xf(f), h - 5 * d, pLabel)
         pLabel.textAlign = Paint.Align.LEFT
 
         val s = AppState.spectrum
@@ -51,12 +53,14 @@ class SpectrumView(ctx: Context) : View(ctx) {
             c.drawRect(padL + b * bw + d, base - s[b] * (h - padT - padB), padL + (b + 1) * bw - d, base, pSpec)
         }
 
+        if (correction.size != freqs.size) return
         val p = Path()
         for (i in correction.indices) {
-            val x = xf(Bands.F10[i]); val yy = y(correction[i])
+            val x = xf(freqs[i]); val yy = y(correction[i])
             if (i == 0) p.moveTo(x, yy) else p.lineTo(x, yy)
         }
         c.drawPath(p, pCorr)
-        for (i in correction.indices) c.drawCircle(xf(Bands.F10[i]), y(correction[i]), 4 * d, pDot)
+        val r = if (freqs.size > 15) 2.5f * d else 4 * d
+        for (i in correction.indices) c.drawCircle(xf(freqs[i]), y(correction[i]), r, pDot)
     }
 }
