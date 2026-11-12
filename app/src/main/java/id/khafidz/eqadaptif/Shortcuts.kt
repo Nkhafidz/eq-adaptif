@@ -11,13 +11,10 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.widget.RemoteViews
 
-/** Widget layar utama: status, nama preset, tombol preset sebelumnya/berikutnya, dan on/off. */
+/** Widget layar utama: status AI dan tombol on/off. */
 class EqWidget : AppWidgetProvider() {
 
     companion object {
-        private const val A_PREV = "id.khafidz.eqadaptif.W_PREV"
-        private const val A_NEXT = "id.khafidz.eqadaptif.W_NEXT"
-
         fun updateAll(ctx: Context) {
             try {
                 val mgr = AppWidgetManager.getInstance(ctx)
@@ -30,16 +27,8 @@ class EqWidget : AppWidgetProvider() {
             Store.init(ctx)
             val on = EqService.instance != null
             val v = RemoteViews(ctx.packageName, R.layout.widget_eq)
-            v.setTextViewText(R.id.w_preset, Store.presetName ?: "Kustom")
-            v.setTextViewText(
-                R.id.w_status,
-                if (!on) "Mati" else if (Store.adaptiveOn) "Aktif · AI" else "Aktif"
-            )
+            v.setTextViewText(R.id.w_preset, if (!on) "Mati" else if (Store.aiOn) "AI aktif" else "AI dijeda")
             v.setTextViewText(R.id.w_power, if (on) "⏻ ON" else "⏻ OFF")
-            v.setOnClickPendingIntent(R.id.w_prev, bcast(ctx, A_PREV, 11))
-            v.setOnClickPendingIntent(R.id.w_next, bcast(ctx, A_NEXT, 12))
-            // Saat mati: buka aplikasi untuk menyalakan (Android melarang menyalakan layanan audio dari latar belakang).
-            // Saat menyala: langsung matikan lewat service.
             v.setOnClickPendingIntent(
                 R.id.w_power,
                 if (on) PendingIntent.getService(
@@ -56,39 +45,19 @@ class EqWidget : AppWidgetProvider() {
             )
             return v
         }
-
-        private fun bcast(ctx: Context, action: String, code: Int): PendingIntent =
-            PendingIntent.getBroadcast(
-                ctx, code, Intent(ctx, EqWidget::class.java).setAction(action),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
     }
 
     override fun onUpdate(context: Context, appWidgetManager: AppWidgetManager, appWidgetIds: IntArray) {
         appWidgetManager.updateAppWidget(appWidgetIds, views(context))
     }
-
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        Store.init(context)
-        when (intent.action) {
-            A_PREV, A_NEXT -> {
-                Store.cyclePreset(if (intent.action == A_NEXT) 1 else -1)
-                EqService.instance?.forceApply()
-                updateAll(context)
-            }
-        }
-    }
 }
 
-/** Tombol di panel Quick Settings (tarik notifikasi ke bawah). */
+/** Tombol di panel Quick Settings. */
 class EqTile : TileService() {
 
     companion object {
         fun refresh(ctx: Context) {
-            try {
-                TileService.requestListeningState(ctx, ComponentName(ctx, EqTile::class.java))
-            } catch (_: Exception) {}
+            try { TileService.requestListeningState(ctx, ComponentName(ctx, EqTile::class.java)) } catch (_: Exception) {}
         }
     }
 
@@ -99,7 +68,7 @@ class EqTile : TileService() {
         val on = EqService.instance != null
         t.state = if (on) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         t.label = "EQ Adaptif"
-        if (Build.VERSION.SDK_INT >= 29) t.subtitle = if (on) (Store.presetName ?: "Aktif") else "Mati"
+        if (Build.VERSION.SDK_INT >= 29) t.subtitle = if (on) (if (Store.aiOn) "AI aktif" else "AI dijeda") else "Mati"
         t.updateTile()
     }
 
