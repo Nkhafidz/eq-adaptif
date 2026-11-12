@@ -553,6 +553,8 @@ class MainActivity : Activity() {
             11.5f, cMuted
         ).apply { setLineSpacing(0f, 1.2f) })
         gap(adv, 10)
+        adv.addView(btn("🧪 Uji kendali Poweramp Equalizer") { peqTest() },
+            LinearLayout.LayoutParams(wrap, wrap).apply { bottomMargin = dp(8) })
         adv.addView(btn("Pengaturan baterai (agar tidak dimatikan sistem)") {
             try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (_: Exception) {}
         })
@@ -761,6 +763,26 @@ class MainActivity : Activity() {
                 else -> toast("Selesai: volume dikompensasi +${String.format("%.1f", Store.dpComp)} dB")
             }
         }
+    }
+
+    /** Uji apakah Poweramp Equalizer bisa dikendalikan AI EQ Adaptif. */
+    private fun peqTest() {
+        if (!PeqBridge.installed(this)) { toast("Poweramp Equalizer tidak terpasang"); return }
+        val logView = tv("", 12.5f, cText).apply { setPadding(dp(20), dp(8), dp(20), dp(8)); setLineSpacing(0f, 1.2f) }
+        val sc = ScrollView(this).apply { addView(logView) }
+        val dlg = AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Uji kendali Poweramp Equalizer")
+            .setMessage("Pastikan Poweramp Equalizer sedang aktif. Jika bisa, buka layarnya di jendela terpisah supaya kenop Bass terlihat bergerak.")
+            .setView(sc)
+            .setPositiveButton("Tutup", null)
+            .create()
+        dlg.show()
+        val lines = ArrayList<String>()
+        PeqBridge.runTest(this, { line ->
+            lines.add(line)
+            logView.text = lines.joinToString("\n\n")
+            sc.post { sc.fullScroll(View.FOCUS_DOWN) }
+        }) { _ -> }
     }
 
     private fun setBands(mode: Int) {
