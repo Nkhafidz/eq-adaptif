@@ -60,7 +60,11 @@ class EqService : Service() {
     val adaptive = Adaptive()
     /** Tes A/B dari layar: efek terpasang tapi tidak memproses (tidak disimpan). */
     var bypass = false
-        set(v) { field = v; fx.values.forEach { it.setBypass(v) } }
+        set(v) {
+            if (v && dvcActive) dvcStop() // kembalikan volume sistem dulu, baru matikan pemrosesan
+            field = v
+            fx.values.forEach { it.setBypass(v) }
+        }
 
     private var lastApplied: FloatArray? = null
     private var legacyFailed = false
@@ -83,8 +87,9 @@ class EqService : Service() {
     override fun onCreate() {
         super.onCreate()
         Store.init(this)
-        instance = this
         am = getSystemService(AudioManager::class.java)
+        Store.recoverDvc(this)
+        instance = this
         goForeground()
         registerSessionReceiver()
         Sessions.open.keys.toList().forEach { attach(it) }
@@ -108,6 +113,7 @@ class EqService : Service() {
     }
 
     override fun onDestroy() {
+        dvcStop()
         handler.removeCallbacksAndMessages(null)
         try { unregisterReceiver(receiver) } catch (_: Exception) {}
         try { am.unregisterAudioDeviceCallback(deviceCallback) } catch (_: Exception) {}
@@ -222,6 +228,7 @@ class EqService : Service() {
     }
 
     fun detach(sid: Int) {
+        if (dvcActive && fx.size == 1 && fx.containsKey(sid)) dvcStop()
         fx.remove(sid)?.release()
         publishSessions()
     }
@@ -245,7 +252,7 @@ class EqService : Service() {
         return FxParams(
             gains = g,
             edges = Bands.edges(freqs),
-            preamp = Store.preamp + Store.dpComp - boost * 0.5f - toneBoost,
+            preamp = Store.preamp + Store.dpComp - boost * 0.5f - toneBoost + dvcGainDb(),
             balance = Store.balance,
             limiterOn = Store.limiterOn || !Store.autoHeadroom, // tanpa pengurangan otomatis, limiter wajib menjaga puncak
             limiterThreshold = Store.limiterThreshold,
@@ -260,8 +267,16 @@ class EqService : Service() {
     private fun rebuildIfBandModeChanged() {
         val stale = fx.filter { it.value.bandCount != Bands.N }.keys.toList()
         for (sid in stale) {
-            fx.remove(sid)?.release()
-            attach(sid)
+            try {
+                val nfx = SessionFx(sid, Bands.N)
+                nfx.apply(currentParams(), true)
+                nfx.setBypass(bypass)
+                fx.put(sid, nfx)?.release() // efek baru aktif dulu, baru yang lama dilepas
+            } catch (e: Exception) {
+                if (dvcActive) dvcStop()
+                fx.remove(sid)?.release()
+                attach(sid)
+            }
         }
     }
 
@@ -342,6 +357,7 @@ class EqService : Service() {
     private fun onOutputChanged(announce: Boolean) {
         val o = detectOutput()
         val changed = o != AppState.output
+        if (changed && dvcActive) dvcReinit = true
         AppState.output = o
         if (Store.autoDevice && (changed || !announce)) {
             val name = Store.devicePresets[o]
@@ -429,6 +445,7 @@ class EqService : Service() {
 
         adaptive.update(Store.target ?: Adaptive.DEFAULT_TARGET, Store.strength, Store.limit)
         rebuildIfBandModeChanged()
+        dvcStep()
         if (calibrating) { AppState.changed(); return }
         val p = currentParams()
         fx.values.forEach { it.apply(p) }
@@ -437,6 +454,101 @@ class EqService : Service() {
         AppState.corr = adaptive.C.copyOf()
         AppState.frames = adaptive.frames
         AppState.changed()
+    }
+
+    // ---------------- DVC (Direct Volume Control) ----------------
+
+    var dvcActive = false
+        private set
+    var dvcLevel = 0          // volume pilihan pengguna (langkah sistem)
+        private set
+    var dvcMax = 15
+        private set
+    private var dvcBaseline = 14
+    private var dvcReinit = false
+
+    private fun dvcWanted(): Boolean = Store.dvcOn && fx.isNotEmpty() && !bypass && !calibrating
+
+    /** Kurva volume perkiraan (mirip kurva media Android): posisi 0..1 -> dB. */
+    private fun volCurve(x: Float): Float {
+        if (x <= 0f) return -96f
+        val px = floatArrayOf(0f, 0.01f, 0.2f, 0.6f, 1f)
+        val py = floatArrayOf(-70f, -58f, -40f, -17f, 0f)
+        for (i in 0 until px.size - 1) {
+            if (x <= px[i + 1]) return py[i] + (py[i + 1] - py[i]) * (x - px[i]) / (px[i + 1] - px[i])
+        }
+        return 0f
+    }
+
+    /** Peredaman di dalam EQ, relatif terhadap volume sistem yang sedang dipasang (baseline). */
+    private fun dvcGainDb(): Float {
+        if (!dvcActive || dvcMax <= 0) return 0f
+        val want = volCurve(dvcLevel.toFloat() / dvcMax)
+        val sys = volCurve(dvcBaseline.toFloat() / dvcMax)
+        return (want - sys).coerceIn(-96f, 6f)
+    }
+
+    private fun dvcStart() {
+        try {
+            dvcMax = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            dvcBaseline = (dvcMax - 1).coerceAtLeast(1)
+            val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+            dvcLevel = cur
+            // simpan dulu posisi asli, baru naikkan volume sistem
+            Store.dvcRestore = cur
+            Store.dvcEngaged = true
+            Store.dvcSteps[AppState.output] = cur
+            Store.save()
+            dvcActive = true
+            fx.values.forEach { it.apply(currentParams(), true) } // peredaman terpasang lebih dulu
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, dvcBaseline, 0)
+        } catch (_: Exception) {
+            dvcActive = false
+        }
+    }
+
+    fun dvcStop() {
+        if (!dvcActive) return
+        try {
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, dvcLevel.coerceIn(0, dvcMax), 0)
+        } catch (_: Exception) {}
+        dvcActive = false
+        Store.dvcEngaged = false
+        Store.save()
+        if (fx.isNotEmpty()) fx.values.forEach { it.apply(currentParams(), true) }
+    }
+
+    private fun dvcStep() {
+        val want = dvcWanted()
+        if (want && !dvcActive) dvcStart()
+        else if (!want && dvcActive) dvcStop()
+        if (!dvcActive) return
+        try {
+            if (dvcReinit) {
+                // perangkat keluaran berganti: Android memakai volume tersimpan milik perangkat itu
+                dvcReinit = false
+                dvcMax = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                dvcBaseline = (dvcMax - 1).coerceAtLeast(1)
+                val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                dvcLevel = Store.dvcSteps[AppState.output] ?: cur
+                Store.dvcRestore = dvcLevel
+                Store.save()
+                fx.values.forEach { it.apply(currentParams(), true) }
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, dvcBaseline, 0)
+                return
+            }
+            val idx = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (idx != dvcBaseline) {
+                // pengguna menekan tombol volume: ubah level di dalam EQ, lalu kembalikan volume sistem
+                dvcLevel = if (idx == 0) 0 else (dvcLevel + (idx - dvcBaseline)).coerceIn(0, dvcMax)
+                Store.dvcSteps[AppState.output] = dvcLevel
+                Store.dvcRestore = dvcLevel
+                Store.save()
+                fx.values.forEach { it.apply(currentParams(), true) }
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, dvcBaseline, 0)
+                AppState.changed()
+            }
+        } catch (_: Exception) {}
     }
 
     // ---------------- Kalibrasi volume ----------------
@@ -452,6 +564,7 @@ class EqService : Service() {
     fun calibrate(done: (Float?) -> Unit) {
         val v = viz
         if (v == null || fx.isEmpty() || calibrating) { done(null); return }
+        dvcStop()
         try { v.setMeasurementMode(Visualizer.MEASUREMENT_MODE_PEAK_RMS) } catch (_: Exception) { done(null); return }
         calibrating = true
         val flat = FxParams(

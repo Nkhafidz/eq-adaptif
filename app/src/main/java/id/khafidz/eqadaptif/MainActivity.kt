@@ -105,6 +105,7 @@ class MainActivity : Activity() {
     // Lanjutan
     private lateinit var swGlobal: Switch
     private lateinit var swBypass: Switch
+    private lateinit var swDvc: Switch
 
     private var suppress = false
     private var startAfterPermission = false
@@ -116,6 +117,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Store.init(this)
+        if (EqService.instance == null) Store.recoverDvc(this)
         window.statusBarColor = cBg
         window.navigationBarColor = cBg
         setContentView(build())
@@ -520,6 +522,23 @@ class MainActivity : Activity() {
         adv.addView(swGlobal)
         adv.addView(tv("Menerapkan EQ ke semua suara HP. Matikan hanya jika suara tidak berubah atau berlipat.", 11.5f, cMuted))
         gap(adv, 10)
+        swDvc = sw("DVC – Kontrol Volume Langsung") { on ->
+            Store.dvcOn = on; Store.save()
+            if (!on) EqService.instance?.dvcStop()
+            toast(if (on) "DVC aktif: tombol volume HP sekarang mengatur volume di dalam EQ" else "DVC mati, volume sistem dikembalikan")
+            refresh()
+        }
+        adv.addView(swDvc)
+        adv.addView(tv(
+            "Seperti Poweramp: volume sistem dipasang hampir maksimal, tombol volume HP mengatur volume di dalam EQ. " +
+            "Hasilnya volume tidak turun saat EQ aktif dan EQ bekerja penuh tanpa pecah.\n" +
+            "• Saat menekan tombol volume, panel volume sistem bisa terlihat melompat. Itu normal.\n" +
+            "• Untuk Bluetooth: jika volume terasa terlalu kecil, nyalakan Opsi pengembang → \"Nonaktifkan volume absolut\" lalu sambungkan ulang.\n" +
+            "• Volume sistem dikembalikan otomatis saat DVC atau EQ dimatikan.\n" +
+            "• PENTING: jika sistem mematikan aplikasi secara paksa, musik bisa tiba-tiba keras. Wajib kecualikan EQ Adaptif dari optimasi baterai (tombol di bawah) sebelum memakai DVC.",
+            11.5f, cMuted
+        ).apply { setLineSpacing(0f, 1.2f) })
+        gap(adv, 10)
         swBypass = sw("Tes: matikan pemrosesan sementara", cViolet) { on ->
             val svc = EqService.instance
             if (svc == null) { toast("Nyalakan Equalizer dulu"); refresh(); return@sw }
@@ -727,6 +746,7 @@ class MainActivity : Activity() {
     private fun runCalibration() {
         val svc = EqService.instance
         if (svc == null) { toast("Nyalakan Equalizer dulu"); return }
+        if (svc.dvcActive) { toast("Matikan DVC dulu untuk kalibrasi"); return }
         if (AppState.frames < Adaptive.READY) { toast("Putar lagu dulu (yang volumenya stabil), lalu coba lagi"); return }
         btnCalib.isEnabled = false
         btnCalib.text = "Mengukur… (±7 detik)"
@@ -844,6 +864,7 @@ class MainActivity : Activity() {
         suppress = true
         swRun.isChecked = running
         swBypass.isChecked = svc?.bypass ?: false
+        swDvc.isChecked = Store.dvcOn
         suppress = false
 
         tvSessions.text = when {
@@ -852,7 +873,8 @@ class MainActivity : Activity() {
             else -> "Terhubung ke: " + AppState.sessions.distinct().joinToString(", ")
         }
         tvOutput.text = "Keluaran: " + Outputs.label(AppState.output) +
-            (if (Store.autoDevice) Store.devicePresets[AppState.output]?.let { " → $it" } ?: "" else "")
+            (if (Store.autoDevice) Store.devicePresets[AppState.output]?.let { " → $it" } ?: "" else "") +
+            (if (svc != null && svc.dvcActive) "\nVolume DVC: ${svc.dvcLevel}/${svc.dvcMax}" else "")
         val err = listOfNotNull(AppState.dpError, if (running) AppState.vizError else null)
         tvError.text = err.joinToString("\n")
         tvError.visibility = if (err.isEmpty()) View.GONE else View.VISIBLE

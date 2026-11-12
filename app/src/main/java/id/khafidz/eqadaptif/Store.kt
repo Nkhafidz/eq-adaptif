@@ -216,6 +216,13 @@ object Store {
     /** Kompensasi hasil kalibrasi: mengimbangi penurunan level dari mesin efek HP (dB). */
     var dpComp = 0f
 
+    // DVC (Direct Volume Control): volume sistem dipasang tinggi, tombol volume mengatur level di dalam EQ
+    var dvcOn = false
+    /** true = volume sistem sedang dinaikkan oleh DVC (untuk pemulihan jika aplikasi tertutup tidak wajar). */
+    var dvcEngaged = false
+    var dvcRestore = -1
+    val dvcSteps = HashMap<String, Int>()      // volume pilihan pengguna per keluaran (langkah sistem)
+
     // AI Auto-seimbang
     var adaptiveOn = false
     var strength = 60
@@ -265,6 +272,11 @@ object Store {
         autoHeadroom = p.getBoolean("autoHeadroom", false)
         loudBoost = p.getFloat("loudBoost", 0f)
         dpComp = p.getFloat("dpComp", 0f)
+        dvcOn = p.getBoolean("dvcOn", false)
+        dvcEngaged = p.getBoolean("dvcEngaged", false)
+        dvcRestore = p.getInt("dvcRestore", -1)
+        dvcSteps.clear()
+        for (o in Outputs.ALL) if (p.contains("dvc_$o")) dvcSteps[o] = p.getInt("dvc_$o", 0)
         if (!p.contains("limiterV2")) {
             // limiter lebih lunak: hanya menahan puncak yang benar-benar melewati batas
             limiterThreshold = -0.2f
@@ -312,6 +324,9 @@ object Store {
             ?.putBoolean("autoHeadroom", autoHeadroom)
             ?.putFloat("loudBoost", loudBoost)
             ?.putFloat("dpComp", dpComp)
+            ?.putBoolean("dvcOn", dvcOn)
+            ?.putBoolean("dvcEngaged", dvcEngaged)
+            ?.putInt("dvcRestore", dvcRestore)
             ?.putBoolean("limiterV2", true)
             ?.putBoolean("adaptiveOn", adaptiveOn)
             ?.putInt("strength", strength)
@@ -322,6 +337,23 @@ object Store {
             ?.putString("devicePresets", dp.toString())
             ?.putBoolean("legacy", legacy)
             ?.apply()
+        val e = sp?.edit() ?: return
+        for ((k, v) in dvcSteps) e.putInt("dvc_$k", v)
+        e.commit() // segera tertulis: penting untuk pemulihan volume
+    }
+
+    /**
+     * Jika aplikasi tertutup saat DVC menaikkan volume sistem, kembalikan volume ke posisi pengguna.
+     * Dipanggil saat aplikasi atau service dibuka.
+     */
+    fun recoverDvc(ctx: Context) {
+        if (!dvcEngaged) return
+        try {
+            val am = ctx.getSystemService(android.media.AudioManager::class.java)
+            if (dvcRestore >= 0) am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, dvcRestore, 0)
+        } catch (_: Exception) {}
+        dvcEngaged = false
+        save()
     }
 
     /** Ganti jumlah band (10 / 31); kurva saat ini ikut dikonversi. */
