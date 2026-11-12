@@ -56,6 +56,8 @@ class MainActivity : Activity() {
     private lateinit var tvLimit: TextView
     private lateinit var sbLimit: SeekBar
     private lateinit var tvTarget: TextView
+    private lateinit var tvComp: TextView
+    private lateinit var sbComp: SeekBar
     private lateinit var btnLock: Button
 
     private var suppress = false
@@ -244,6 +246,11 @@ class MainActivity : Activity() {
         sbLimit = seek(8) { p -> Store.limit = p + 2; Store.save(); refreshLabels() }
         ai.addView(sbLimit)
         gap(ai, 8)
+        tvComp = tv("", 13f, cMuted); ai.addView(tvComp)
+        sbComp = seek(18) { p -> Store.comp = p / 2f; Store.save(); refreshLabels() }
+        ai.addView(sbComp)
+        ai.addView(tv("Menambah volume hanya saat AI sedang mengoreksi, untuk mengimbangi volume yang turun di sebagian HP. Atur sampai volumenya terasa sama dengan saat AI tidak mengoreksi.", 11.5f, cMuted))
+        gap(ai, 8)
         tvTarget = tv("", 13f, cMuted); ai.addView(tvTarget)
         val tRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         btnLock = btn("🔒 Kunci karakter lagu ini") {
@@ -292,6 +299,7 @@ class MainActivity : Activity() {
         swAi.isChecked = Store.aiOn
         sbStrength.progress = Store.strength
         sbLimit.progress = Store.limit - 2
+        sbComp.progress = (Store.comp * 2).roundToInt()
         suppress = false
         refreshLabels()
         refresh()
@@ -300,6 +308,7 @@ class MainActivity : Activity() {
     private fun refreshLabels() {
         tvStrength.text = "Kekuatan koreksi: ${Store.strength}%"
         tvLimit.text = "Batas koreksi per band: ±${Store.limit} dB"
+        tvComp.text = "Penguat volume saat koreksi: +${String.format("%.1f", Store.comp)} dB"
         tvTarget.text = "Target: " + if (Store.target != null) "dikunci dari ${Store.targetName ?: "lagu referensi"}" else "Netral (bawaan)"
     }
 
@@ -313,7 +322,8 @@ class MainActivity : Activity() {
 
         tvState.text = when {
             !running -> "Mati. Nyalakan untuk mulai."
-            AppState.bands > 0 -> "Berjalan · koreksi AI di atas EQ Anda (${AppState.bands} band)"
+            AppState.bands > 0 -> "Berjalan · koreksi AI di atas EQ Anda (${AppState.bands} band) · " +
+                if (AppState.fxActive) "sedang mengoreksi" else "tidak mengoreksi (suara asli)"
             else -> "Berjalan"
         }
         val err = listOfNotNull(if (running) AppState.error else null, if (running) AppState.vizError else null)

@@ -21,6 +21,8 @@ object Store {
     var limit = 6              // dB
     var target: FloatArray? = null
     var targetName: String? = null
+    /** Penguat volume (dB) yang dipasang hanya saat koreksi AI aktif, untuk mengimbangi turunnya volume. */
+    var comp = 3f
 
     fun init(ctx: Context) {
         if (sp != null) return
@@ -31,6 +33,7 @@ object Store {
         limit = p.getInt("limit", 6)
         target = arr(p.getString("target", null))
         targetName = p.getString("targetName", null)
+        comp = p.getFloat("aiComp", 3f)
     }
 
     fun save() {
@@ -40,6 +43,7 @@ object Store {
             ?.putInt("limit", limit)
             ?.putString("target", target?.joinToString(",") ?: "")
             ?.putString("targetName", targetName)
+            ?.putFloat("aiComp", comp)
             ?.apply()
     }
 
@@ -74,6 +78,7 @@ object AppState {
     var corr = FloatArray(10)       // koreksi AI (dB) di 10 band
     var frames = 0                  // jumlah frame analisis lagu saat ini
     var bands = 0                   // jumlah band equalizer koreksi di HP ini
+    var fxActive = false            // efek koreksi sedang memproses suara
     var error: String? = null
     var vizError: String? = null
 
