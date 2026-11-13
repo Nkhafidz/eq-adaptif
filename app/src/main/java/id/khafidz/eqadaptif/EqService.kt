@@ -242,7 +242,7 @@ class EqService : Service() {
         adaptive.update(Store.target ?: adaptive.defaultTarget, Store.strength, Store.limit)
         val f = fx
         if (f != null) {
-            f.apply(if (Store.aiOn) adaptive.C else FloatArray(adaptive.n), Store.comp)
+            f.apply(if (Store.aiOn) adaptive.C else FloatArray(adaptive.n), Store.comp, Store.aiOn)
             AppState.fxActive = f.active
             AppState.error = if (!f.hasControl)
                 "Koreksi AI sedang dikendalikan aplikasi lain (EQ lain memakai jenis efek yang sama)." else null

@@ -27,6 +27,8 @@ class CompanionFx(private val freqs: FloatArray) {
     private var lastComp = -1f
     private var on = false
     private var last: FloatArray? = null
+    private var quietSince = 0L
+    private var lastEqMb: IntArray? = null
 
     /** Koreksi yang benar-benar terpasang, dalam band analisis, untuk dikurangkan saat analisis. */
     var applied = FloatArray(freqs.size)
@@ -92,34 +94,55 @@ class CompanionFx(private val freqs: FloatArray) {
         dp = null
         on = false
         last = null
+        lastEqMb = null
         startEq()
     }
 
-    fun apply(corr: FloatArray, compDb: Float) {
-        val needed = corr.any { abs(it) >= 0.5f }
-        if (needed != on) {
-            try { dp?.setEnabled(needed); eq?.setEnabled(needed) } catch (_: Exception) {}
-            on = needed
+    /**
+     * Menyalakan/mematikan efek membuat Android menyusun ulang jalur audio sesaat (suara terputus sepersekian detik).
+     * Karena itu efek dinyalakan sekali saat koreksi pertama kali dibutuhkan, lalu dibiarkan menyala.
+     * Efek hanya dimatikan jika AI dijeda, atau koreksi sudah hampir nol selama 30 detik berturut-turut.
+     */
+    fun apply(corr: FloatArray, compDb: Float, aiOn: Boolean) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val big = corr.any { abs(it) >= 0.7f }
+        val tiny = corr.all { abs(it) < 0.2f }
+        quietSince = if (tiny) (if (quietSince == 0L) now else quietSince) else 0L
+        val want = when {
+            !aiOn -> false
+            on -> !(tiny && now - quietSince > 30_000)
+            else -> big
+        }
+        if (want != on) {
+            try { dp?.setEnabled(want); eq?.setEnabled(want) } catch (_: Exception) {}
+            on = want
         }
         setCompensation(if (on) compDb else 0f)
 
         val d = dp
         val e = eq
         if (d != null) {
-            val l = last
+            val l = last ?: FloatArray(corr.size) { Float.NaN }.also { last = it }
             for (i in corr.indices) {
-                if (l == null || abs(corr[i] - l[i]) >= 0.1f) {
+                // hanya band yang berubah cukup banyak yang dikirim, supaya tidak ada klik/jeda
+                if (l[i].isNaN() || abs(corr[i] - l[i]) >= 0.2f) {
                     val edge = if (i == corr.size - 1) 20000f else sqrt(freqs[i] * freqs[i + 1])
                     try { d.setPreEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, edge, corr[i])) } catch (_: Exception) {}
+                    l[i] = corr[i]
                 }
             }
-            last = corr.copyOf()
-            applied = if (on) corr.copyOf() else FloatArray(corr.size)
+            applied = if (on) l.copyOf() else FloatArray(corr.size)
         } else if (e != null) {
             val g = Bands.interp(corr, freqs, eqCenters)
             val mb = IntArray(g.size) { (g[it] * 100).toInt().coerceIn(eqMin, eqMax) }
-            for (i in mb.indices) try { e.setBandLevel(i.toShort(), mb[i].toShort()) } catch (_: Exception) {}
-            val actual = FloatArray(mb.size) { if (on) mb[it] / 100f else 0f }
+            val lm = lastEqMb ?: IntArray(mb.size) { Int.MIN_VALUE }.also { lastEqMb = it }
+            for (i in mb.indices) {
+                if (lm[i] == Int.MIN_VALUE || abs(mb[i] - lm[i]) >= 20) {
+                    try { e.setBandLevel(i.toShort(), mb[i].toShort()) } catch (_: Exception) {}
+                    lm[i] = mb[i]
+                }
+            }
+            val actual = FloatArray(lm.size) { if (on) lm[it] / 100f else 0f }
             applied = Bands.interp(actual, eqCenters, freqs)
         }
     }
