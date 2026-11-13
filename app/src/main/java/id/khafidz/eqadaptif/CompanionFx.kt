@@ -29,6 +29,11 @@ class CompanionFx(private val freqs: FloatArray) {
     private var last: FloatArray? = null
     private var quietSince = 0L
     private var lastEqMb: IntArray? = null
+    private var lastSend = 0L
+
+    /** Jeda minimum antar pengiriman nilai band: setiap pengiriman membuat mesin efek menghitung ulang filter. */
+    private val minIntervalMs = 8_000L
+    private val minStepDb = 0.5f
 
     /** Koreksi yang benar-benar terpasang, dalam band analisis, untuk dikurangkan saat analisis. */
     var applied = FloatArray(freqs.size)
@@ -122,25 +127,31 @@ class CompanionFx(private val freqs: FloatArray) {
         val d = dp
         val e = eq
         if (d != null) {
+            val first = last == null
             val l = last ?: FloatArray(corr.size) { Float.NaN }.also { last = it }
-            for (i in corr.indices) {
-                // hanya band yang berubah cukup banyak yang dikirim, supaya tidak ada klik/jeda
-                if (l[i].isNaN() || abs(corr[i] - l[i]) >= 0.2f) {
+            val due = first || now - lastSend >= minIntervalMs
+            if (due && (first || corr.indices.any { abs(corr[it] - l[it]) >= minStepDb })) {
+                // kirim semua band sekaligus, jarang-jarang, supaya tidak ada jeda berkala
+                for (i in corr.indices) {
                     val edge = if (i == corr.size - 1) 20000f else sqrt(freqs[i] * freqs[i + 1])
                     try { d.setPreEqBandAllChannelsTo(i, DynamicsProcessing.EqBand(true, edge, corr[i])) } catch (_: Exception) {}
                     l[i] = corr[i]
                 }
+                lastSend = now
             }
             applied = if (on) l.copyOf() else FloatArray(corr.size)
         } else if (e != null) {
             val g = Bands.interp(corr, freqs, eqCenters)
             val mb = IntArray(g.size) { (g[it] * 100).toInt().coerceIn(eqMin, eqMax) }
+            val first = lastEqMb == null
             val lm = lastEqMb ?: IntArray(mb.size) { Int.MIN_VALUE }.also { lastEqMb = it }
-            for (i in mb.indices) {
-                if (lm[i] == Int.MIN_VALUE || abs(mb[i] - lm[i]) >= 20) {
+            val due = first || now - lastSend >= minIntervalMs
+            if (due && (first || mb.indices.any { abs(mb[it] - lm[it]) >= (minStepDb * 100).toInt() })) {
+                for (i in mb.indices) {
                     try { e.setBandLevel(i.toShort(), mb[i].toShort()) } catch (_: Exception) {}
                     lm[i] = mb[i]
                 }
+                lastSend = now
             }
             val actual = FloatArray(lm.size) { if (on) lm[it] / 100f else 0f }
             applied = Bands.interp(actual, eqCenters, freqs)
