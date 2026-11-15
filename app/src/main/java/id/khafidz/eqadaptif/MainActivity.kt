@@ -58,6 +58,7 @@ class MainActivity : Activity() {
     private lateinit var tvTarget: TextView
     private lateinit var tvComp: TextView
     private val bandButtons = LinkedHashMap<Int, Button>()
+    private val engineButtons = LinkedHashMap<Int, Button>()
     private lateinit var sbComp: SeekBar
     private lateinit var btnLock: Button
 
@@ -254,6 +255,22 @@ class MainActivity : Activity() {
         ai.addView(bRow)
         ai.addView(tv("Lebih banyak band = koreksi lebih detail. Jika HP tidak mendukung, otomatis memakai equalizer dasar HP (biasanya 5 band).", 11.5f, cMuted))
         gap(ai, 8)
+        val eRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        eRow.addView(tv("Mesin koreksi", 13f, cMuted), LinearLayout.LayoutParams(0, wrap, 1f))
+        for ((m, label) in listOf(0 to "Otomatis", 1 to "Detail", 2 to "Dasar")) {
+            val b = btn(label) {
+                if (Store.engine != m) {
+                    Store.engine = m; Store.save()
+                    toast("Mesin koreksi: $label")
+                    refreshAll()
+                }
+            }
+            eRow.addView(b, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(6) })
+            engineButtons[m] = b
+        }
+        ai.addView(eRow)
+        ai.addView(tv("Detail = halus, tapi lebih berat. Dasar = equalizer bawaan HP, ringan. Jika suara tersendat, coba \"Dasar\".", 11.5f, cMuted))
+        gap(ai, 8)
         tvStrength = tv("", 13f, cMuted); ai.addView(tvStrength)
         sbStrength = seek(100) { p -> Store.strength = p; Store.save(); refreshLabels() }
         ai.addView(sbStrength)
@@ -266,7 +283,7 @@ class MainActivity : Activity() {
         tvComp = tv("", 13f, cMuted); ai.addView(tvComp)
         sbComp = seek(18) { p -> Store.comp = p / 2f; Store.save(); refreshLabels() }
         ai.addView(sbComp)
-        ai.addView(tv("Menambah volume hanya saat AI sedang mengoreksi, untuk mengimbangi volume yang turun di sebagian HP. Atur sampai volumenya terasa sama dengan saat AI tidak mengoreksi.", 11.5f, cMuted))
+        ai.addView(tv("Menambah volume hanya saat AI sedang mengoreksi, untuk mengimbangi volume yang turun di sebagian HP. Atur sampai volumenya terasa sama dengan saat AI tidak mengoreksi. Geser ke 0 untuk mematikan penguat.", 11.5f, cMuted))
         gap(ai, 8)
         tvTarget = tv("", 13f, cMuted); ai.addView(tvTarget)
         val tRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -332,6 +349,11 @@ class MainActivity : Activity() {
     private fun refreshLabels() {
         tvStrength.text = "Kekuatan koreksi: ${Store.strength}%"
         tvLimit.text = "Batas koreksi per band: ±${Store.limit} dB"
+        for ((m, b) in engineButtons) {
+            val on = Store.engine == m
+            b.background = if (on) rounded(cViolet, cViolet, 9) else rounded(cPanel2, cLine, 9)
+            b.setTextColor(if (on) 0xFF1A1205.toInt() else cText)
+        }
         for ((n, b) in bandButtons) {
             val on = Store.bands == n
             b.background = if (on) rounded(cViolet, cViolet, 9) else rounded(cPanel2, cLine, 9)

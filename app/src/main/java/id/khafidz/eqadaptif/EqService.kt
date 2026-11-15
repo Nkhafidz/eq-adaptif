@@ -160,7 +160,7 @@ class EqService : Service() {
     private fun startCorrection() {
         if (fx != null) return
         try {
-            val f = CompanionFx(adaptive.freqs)
+            val f = CompanionFx(adaptive.freqs, Store.engine)
             fx = f
             AppState.engine = f.engineName
             AppState.error = null
@@ -236,6 +236,7 @@ class EqService : Service() {
             fx?.release(); fx = null
             adaptive = Adaptive(Bands.FREQS)
         }
+        if (fx != null && fx?.mode != Store.engine) { fx?.release(); fx = null }
         if (fx == null) startCorrection()
         fx?.fallbackIfNeeded()
         AppState.engine = fx?.engineName ?: ""

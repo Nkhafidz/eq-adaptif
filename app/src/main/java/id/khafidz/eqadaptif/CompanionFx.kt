@@ -16,7 +16,7 @@ import kotlin.math.sqrt
  * Efek hanya dinyalakan jika koreksinya berarti, dan penguat volume ikut menyala bersamaan
  * untuk mengimbangi turunnya volume saat efek aktif di sebagian HP.
  */
-class CompanionFx(private val freqs: FloatArray) {
+class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
     private var dp: DynamicsProcessing? = null
     private var eq: Equalizer? = null
     private var eqCenters = FloatArray(0)
@@ -49,7 +49,11 @@ class CompanionFx(private val freqs: FloatArray) {
         }
 
     init {
-        if (!startDp()) startEq()
+        when (mode) {
+            1 -> startDp()            // detail saja
+            2 -> startEq()            // dasar saja
+            else -> if (!startDp()) startEq()
+        }
     }
 
     private fun startDp(): Boolean {
@@ -93,6 +97,7 @@ class CompanionFx(private val freqs: FloatArray) {
 
     /** Mesin detail kalah prioritas (mis. EQ lain memakai jenis efek yang sama): pindah ke equalizer dasar. */
     fun fallbackIfNeeded() {
+        if (mode != 0) return
         val d = dp ?: return
         if (try { d.hasControl() } catch (_: Exception) { false }) return
         try { d.release() } catch (_: Exception) {}

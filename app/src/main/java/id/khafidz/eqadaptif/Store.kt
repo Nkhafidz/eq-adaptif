@@ -46,6 +46,8 @@ object Store {
     var aiOn = true
     /** Detail koreksi: 10, 15, atau 31 band. */
     var bands = 10
+    /** Mesin koreksi: 0 otomatis, 1 detail (DynamicsProcessing), 2 dasar (equalizer bawaan HP). */
+    var engine = 0
     var strength = 60          // %
     var limit = 6              // dB
     var target: FloatArray? = null
@@ -58,6 +60,7 @@ object Store {
         val p = ctx.applicationContext.getSharedPreferences("eq", Context.MODE_PRIVATE)
         sp = p
         aiOn = p.getBoolean("adaptiveOn", true)
+        engine = p.getInt("aiEngine", 0).coerceIn(0, 2)
         bands = p.getInt("aiBands", 10).let { if (it == 15 || it == 31) it else 10 }
         strength = p.getInt("strength", 60)
         limit = p.getInt("limit", 6)
@@ -72,6 +75,7 @@ object Store {
         sp?.edit()
             ?.putBoolean("adaptiveOn", aiOn)
             ?.putInt("aiBands", bands)
+            ?.putInt("aiEngine", engine)
             ?.putInt("strength", strength)
             ?.putInt("limit", limit)
             ?.putString("target", target?.joinToString(",") ?: "")
