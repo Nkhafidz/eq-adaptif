@@ -245,8 +245,8 @@ class EqService : Service() {
         if (f != null) {
             f.apply(if (Store.aiOn) adaptive.C else FloatArray(adaptive.n), Store.comp, Store.aiOn)
             AppState.fxActive = f.active
-            AppState.error = if (!f.hasControl)
-                "Koreksi AI sedang dikendalikan aplikasi lain (EQ lain memakai jenis efek yang sama)." else null
+            AppState.error = if (!f.available)
+                "Koreksi AI tidak terpasang: mesin ini sedang dipakai EQ lain. Pilih mesin \"Dasar\" atau \"Otomatis\"." else null
         }
         if (lastAiOn != Store.aiOn) { lastAiOn = Store.aiOn; updateNotification() }
         AppState.corr = if (Store.aiOn) adaptive.C.copyOf() else FloatArray(adaptive.n)

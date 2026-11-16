@@ -39,12 +39,16 @@ class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
     var applied = FloatArray(freqs.size)
         private set
 
-    val active: Boolean get() = on
+    /** Ada mesin yang benar-benar terpasang dan memegang kendali. */
+    val available: Boolean get() = (dp != null || eq != null) && hasControl
+
+    val active: Boolean get() = on && available
 
     val engineName: String
         get() = when {
             dp != null -> "${freqs.size} band (mesin detail)"
             eq != null -> "${eqCenters.size} band (equalizer dasar HP)"
+            mode == 1 -> "tidak tersedia: mesin detail sedang dipakai EQ lain (mis. Poweramp Equalizer). Pilih \"Dasar\""
             else -> "tidak tersedia"
         }
 
@@ -119,7 +123,7 @@ class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
         val tiny = corr.all { abs(it) < 0.2f }
         quietSince = if (tiny) (if (quietSince == 0L) now else quietSince) else 0L
         val want = when {
-            !aiOn -> false
+            !aiOn || !available -> false
             on -> !(tiny && now - quietSince > 30_000)
             else -> big
         }
