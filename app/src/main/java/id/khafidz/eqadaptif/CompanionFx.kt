@@ -203,7 +203,7 @@ class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
         val m = freqs.size
         // bobot: daerah redaman (nilai negatif) dijaga lebih ketat supaya tidak meleset ke tetangga
         val w = FloatArray(m) { k -> if (target[k] < -0.5f) 1.6f else 1f }
-        val lambda = 0.05f * m / b
+        val lambda = 0.15f * m / b   // regularisasi lebih kuat: nilai band lebih kalem
         val a = Array(b) { DoubleArray(b + 1) }
         for (i in 0 until b) {
             for (j in 0 until b) {
@@ -226,8 +226,10 @@ class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
                 for (cc in c..b) a[rr][cc] -= fct * a[c][cc]
             }
         }
-        val lim = (eqMax / 100f).coerceAtMost(12f)
-        return FloatArray(b) { i -> if (abs(a[i][i]) < 1e-9) 0f else (a[i][b] / a[i][i]).toFloat().coerceIn(-lim, lim) }
+        // Equalizer dasar HP tidak punya limiter: AI hanya boleh MEREDAM (tidak menaikkan band),
+        // dan redaman dibatasi -6 dB. Volume yang hilang diimbangi penguat volume (yang punya pengaman pecah).
+        val minCut = maxOf(eqMin / 100f, -6f)
+        return FloatArray(b) { i -> if (abs(a[i][i]) < 1e-9) 0f else (a[i][b] / a[i][i]).toFloat().coerceIn(minCut, 0f) }
     }
 
     private fun setCompensation(db: Float) {

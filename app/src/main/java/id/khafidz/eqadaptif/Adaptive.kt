@@ -164,8 +164,8 @@ class Adaptive(val freqs: FloatArray) {
                 if (excess > 3f) {
                     found.add(Issue(name, excess))
                     for (k in idx) {
-                        // redam penuh sampai batas + 3 dB, tidak terpengaruh "kekuatan koreksi"
-                        val cut = -((sh[k] - target[k]) * 0.9f).coerceIn(0f, limitDb + 3f)
+                        // redam penuh sampai batas koreksi, tidak terpengaruh "kekuatan koreksi"
+                        val cut = -((sh[k] - target[k]) * 0.9f).coerceIn(0f, limitDb.toFloat())
                         d[k] = minOf(d[k], cut)
                     }
                 }
