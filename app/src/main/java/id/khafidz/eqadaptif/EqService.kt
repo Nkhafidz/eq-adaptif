@@ -287,6 +287,7 @@ class EqService : Service() {
         }
         if (lastAiOn != Store.aiOn) { lastAiOn = Store.aiOn; updateNotification() }
         AppState.corr = if (Store.aiOn) adaptive.C.copyOf() else FloatArray(adaptive.n)
+        AppState.applied = fx?.applied?.copyOf() ?: FloatArray(adaptive.n)
         AppState.corrFreqs = adaptive.freqs
         AppState.frames = adaptive.frames
         AppState.changed()

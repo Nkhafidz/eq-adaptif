@@ -202,7 +202,7 @@ class MainActivity : Activity() {
         val sp = card(root)
         spectrum = SpectrumView(this)
         sp.addView(spectrum, LinearLayout.LayoutParams(match, dp(170)))
-        sp.addView(tv("Hijau = musik yang sedang diputar. Ungu = koreksi AI saat ini (dB).", 11.5f, cMuted))
+        sp.addView(tv("Hijau = musik yang sedang diputar. Ungu = koreksi yang diinginkan AI. Oranye putus-putus = koreksi yang benar-benar terpasang di HP.", 11.5f, cMuted))
 
         // AI
         val ai = card(root, accent = true)
@@ -422,6 +422,7 @@ class MainActivity : Activity() {
         tvTreble.text = if (active) sgn(t) else "–"
         spectrum.freqs = fr
         spectrum.correction = if (active && c.size == fr.size) c.copyOf() else FloatArray(fr.size)
+        spectrum.applied = if (active && AppState.fxActive) AppState.applied.copyOf() else null
         if (!running) AppState.spectrum.fill(0f)
         spectrum.invalidate()
 

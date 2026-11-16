@@ -20,6 +20,8 @@ class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
     private var dp: DynamicsProcessing? = null
     private var eq: Equalizer? = null
     private var eqCenters = FloatArray(0)
+    private var eqSigma = FloatArray(0)      // lebar tiap band (oktaf, sigma Gaussian)
+    private var resp: Array<FloatArray>? = null  // respons tiap band di frekuensi analisis
     private var eqMin = -1500
     private var eqMax = 1500
     private var loud: LoudnessEnhancer? = null
@@ -88,6 +90,16 @@ class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
             val e = Equalizer(0, 0)
             val b = e.numberOfBands.toInt()
             eqCenters = FloatArray(b) { e.getCenterFreq(it.toShort()) / 1000f }
+            // lebar band dari HP: rentang frekuensi tiap band -> lebar dalam oktaf
+            eqSigma = FloatArray(b) { i ->
+                try {
+                    val r = e.getBandFreqRange(i.toShort())
+                    val lo = (r[0] / 1000f).coerceAtLeast(10f)
+                    val hi = (r[1] / 1000f).coerceAtLeast(lo * 1.2f)
+                    (log2(hi / lo) / 2.355f).coerceIn(0.35f, 1.6f)   // FWHM -> sigma
+                } catch (_: Exception) { 0.9f }
+            }
+            resp = Array(b) { i -> FloatArray(freqs.size) { k -> bump(freqs[k], eqCenters[i], eqSigma[i]) } }
             val r = e.bandLevelRange
             eqMin = r[0].toInt(); eqMax = r[1].toInt()
             e.setEnabled(false)
@@ -150,7 +162,7 @@ class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
             }
             applied = if (on) l.copyOf() else FloatArray(corr.size)
         } else if (e != null) {
-            val g = Bands.interp(corr, freqs, eqCenters)
+            val g = fit(corr)
             val mb = IntArray(g.size) { (g[it] * 100).toInt().coerceIn(eqMin, eqMax) }
             val first = lastEqMb == null
             val lm = lastEqMb ?: IntArray(mb.size) { Int.MIN_VALUE }.also { lastEqMb = it }
@@ -162,9 +174,60 @@ class CompanionFx(private val freqs: FloatArray, val mode: Int = 0) {
                 }
                 lastSend = now
             }
-            val actual = FloatArray(lm.size) { if (on) lm[it] / 100f else 0f }
-            applied = Bands.interp(actual, eqCenters, freqs)
+            applied = if (on) modelCurve(FloatArray(lm.size) { lm[it] / 100f }) else FloatArray(freqs.size)
         }
+    }
+
+    private fun log2(x: Float): Float = (kotlin.math.ln(x.toDouble()) / kotlin.math.ln(2.0)).toFloat()
+
+    /** Perkiraan respons satu band equalizer (dB per dB gain) di frekuensi f: "bukit" pada skala oktaf. */
+    private fun bump(f: Float, fc: Float, sigma: Float): Float {
+        val x = log2(f / fc) / sigma
+        return kotlin.math.exp(-0.5f * x * x)
+    }
+
+    /** Kurva hasil gabungan band (model), di frekuensi analisis. */
+    private fun modelCurve(gains: FloatArray): FloatArray {
+        val r = resp ?: return FloatArray(freqs.size)
+        return FloatArray(freqs.size) { k -> var s = 0f; for (i in gains.indices) s += gains[i] * r[i][k]; s }
+    }
+
+    /**
+     * Cari nilai band equalizer yang gabungannya paling mendekati kurva koreksi (least-squares berbobot,
+     * dengan sedikit regularisasi supaya nilai band tidak ekstrem). Jauh lebih tepat daripada
+     * mengambil nilai di frekuensi tengah saja.
+     */
+    private fun fit(target: FloatArray): FloatArray {
+        val r = resp ?: return Bands.interp(target, freqs, eqCenters)
+        val b = r.size
+        val m = freqs.size
+        // bobot: daerah redaman (nilai negatif) dijaga lebih ketat supaya tidak meleset ke tetangga
+        val w = FloatArray(m) { k -> if (target[k] < -0.5f) 1.6f else 1f }
+        val lambda = 0.05f * m / b
+        val a = Array(b) { DoubleArray(b + 1) }
+        for (i in 0 until b) {
+            for (j in 0 until b) {
+                var s = 0.0
+                for (k in 0 until m) s += w[k] * r[i][k] * r[j][k]
+                a[i][j] = s + if (i == j) lambda else 0f
+            }
+            var y = 0.0
+            for (k in 0 until m) y += w[k] * r[i][k] * target[k]
+            a[i][b] = y
+        }
+        // eliminasi Gauss
+        for (c in 0 until b) {
+            var piv = c
+            for (rr in c + 1 until b) if (abs(a[rr][c]) > abs(a[piv][c])) piv = rr
+            val t = a[c]; a[c] = a[piv]; a[piv] = t
+            if (abs(a[c][c]) < 1e-9) continue
+            for (rr in 0 until b) if (rr != c) {
+                val fct = a[rr][c] / a[c][c]
+                for (cc in c..b) a[rr][cc] -= fct * a[c][cc]
+            }
+        }
+        val lim = (eqMax / 100f).coerceAtMost(12f)
+        return FloatArray(b) { i -> if (abs(a[i][i]) < 1e-9) 0f else (a[i][b] / a[i][i]).toFloat().coerceIn(-lim, lim) }
     }
 
     private fun setCompensation(db: Float) {

@@ -128,6 +128,7 @@ object Store {
 object AppState {
     var corr = FloatArray(10)       // koreksi AI (dB) per band analisis
     var corrFreqs = Bands.F10       // frekuensi untuk corr
+    var applied = FloatArray(10)    // bentuk koreksi yang benar-benar terpasang (per band analisis)
     var engine = ""                 // mesin koreksi yang dipakai
     var guardLevel = 0              // 0 aman, 1 waspada, 2 mendekati pecah
     var peakDb = -96f               // puncak rata-rata 10 detik terakhir (dBFS)

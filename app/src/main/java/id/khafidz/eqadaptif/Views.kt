@@ -11,6 +11,7 @@ import kotlin.math.ln
 class SpectrumView(ctx: Context) : View(ctx) {
     var correction = FloatArray(10)
     var freqs = Bands.F10
+    var applied: FloatArray? = null
 
     private val d = resources.displayMetrics.density
     private val range = 10f
@@ -23,6 +24,10 @@ class SpectrumView(ctx: Context) : View(ctx) {
     private val pSpec = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF4FD1C5.toInt(); alpha = 80 }
     private val pCorr = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFB794F6.toInt(); style = Paint.Style.STROKE; strokeWidth = 3 * d; strokeCap = Paint.Cap.ROUND
+    }
+    private val pApplied = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFB547.toInt(); style = Paint.Style.STROKE; strokeWidth = 2 * d
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(6 * d, 5 * d), 0f)
     }
     private val pDot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFB794F6.toInt() }
 
@@ -54,6 +59,11 @@ class SpectrumView(ctx: Context) : View(ctx) {
         }
 
         if (correction.size != freqs.size) return
+        applied?.takeIf { it.size == freqs.size }?.let { a ->
+            val pa = Path()
+            for (i in a.indices) { val x = xf(freqs[i]); val yy = y(a[i]); if (i == 0) pa.moveTo(x, yy) else pa.lineTo(x, yy) }
+            c.drawPath(pa, pApplied)
+        }
         val p = Path()
         for (i in correction.indices) {
             val x = xf(freqs[i]); val yy = y(correction[i])
