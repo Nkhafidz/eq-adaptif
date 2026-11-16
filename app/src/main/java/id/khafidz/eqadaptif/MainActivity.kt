@@ -59,6 +59,9 @@ class MainActivity : Activity() {
     private lateinit var tvComp: TextView
     private val bandButtons = LinkedHashMap<Int, Button>()
     private val engineButtons = LinkedHashMap<Int, Button>()
+    private lateinit var swGuard: Switch
+    private lateinit var tvGuard: TextView
+    private lateinit var tvGuardDetail: TextView
     private lateinit var sbComp: SeekBar
     private lateinit var btnLock: Button
 
@@ -299,6 +302,28 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(wrap, wrap).apply { marginStart = dp(8) })
         ai.addView(tRow, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(6) })
 
+        // Penjaga Kenyamanan
+        val gd = card(root, accent = true)
+        gd.addView(tv("🛡 Penjaga Kenyamanan", 17f, cText, true))
+        gd.addView(tv("Mendeteksi suara yang mendekati pecah dan daerah yang tidak nyaman didengar (bass bengkak, keruh, cempreng, desis tajam), lalu meredamnya.", 12.5f, cMuted))
+        gap(gd, 8)
+        swGuard = sw("Penjaga Kenyamanan") { on ->
+            Store.guardOn = on; Store.save()
+            toast(if (on) "Penjaga Kenyamanan menyala" else "Penjaga Kenyamanan mati")
+            refresh()
+        }
+        gd.addView(swGuard)
+        gap(gd, 6)
+        tvGuard = tv("", 14f, cText, true).apply {
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = rounded(0xFF0F0D16.toInt(), 0xFF2B2540.toInt(), 10)
+        }
+        gd.addView(tvGuard, LinearLayout.LayoutParams(match, wrap))
+        gap(gd, 6)
+        tvGuardDetail = tv("", 12.5f, cMuted).apply { setLineSpacing(0f, 1.2f) }
+        gd.addView(tvGuardDetail)
+        gd.addView(tv("Catatan: suara yang sudah pecah di rekamannya tidak bisa diperbaiki. Penjaga hanya mencegah EQ & AI memperparahnya, dan meredam daerah yang rata-rata terlalu menonjol sepanjang lagu.", 11.5f, cMuted))
+
         // Cara pakai
         val help = card(root)
         help.addView(tv("Cara pakai", 15f, cText, true))
@@ -369,6 +394,7 @@ class MainActivity : Activity() {
         suppress = true
         swRun.isChecked = running
         swAi.isChecked = Store.aiOn
+        swGuard.isChecked = Store.guardOn
         suppress = false
 
         tvState.text = when {
@@ -398,6 +424,33 @@ class MainActivity : Activity() {
         spectrum.correction = if (active && c.size == fr.size) c.copyOf() else FloatArray(fr.size)
         if (!running) AppState.spectrum.fill(0f)
         spectrum.invalidate()
+
+        // Penjaga Kenyamanan
+        when {
+            !running -> { tvGuard.text = "–"; tvGuard.setTextColor(cMuted); tvGuardDetail.text = "" }
+            !Store.guardOn -> { tvGuard.text = "Mati"; tvGuard.setTextColor(cMuted); tvGuardDetail.text = "" }
+            else -> {
+                val (label, color) = when (AppState.guardLevel) {
+                    2 -> "⚠ Mendekati pecah" to 0xFFFF6B6B.toInt()
+                    1 -> "△ Waspada: puncak sering mentok" to 0xFFFFB547.toInt()
+                    else -> "✓ Aman" to 0xFF4FD1C5.toInt()
+                }
+                tvGuard.text = label
+                tvGuard.setTextColor(color)
+                val lines = ArrayList<String>()
+                if (AppState.peakDb > -90f)
+                    lines.add("Puncak rata-rata ${String.format("%.1f", AppState.peakDb)} dB · jarak puncak ke rata-rata ${String.format("%.1f", AppState.crestDb)} dB")
+                if (AppState.guardLevel >= 1) {
+                    lines.add("• AI berhenti menaikkan band dan penguat volume dimatikan sementara.")
+                    lines.add("• Saran: turunkan Bass/Preamp di Poweramp Equalizer, atau turunkan sedikit volume.")
+                }
+                val iss = AppState.issues
+                if (iss.isEmpty() && frames >= Adaptive.READY) lines.add("Tidak ada daerah yang terlalu menonjol di lagu ini.")
+                for (i in iss) lines.add("• ${i.name}: +${String.format("%.1f", i.excessDb)} dB di atas target → diredam")
+                if (frames < Adaptive.READY) lines.add("Menunggu analisis lagu…")
+                tvGuardDetail.text = lines.joinToString("\n")
+            }
+        }
 
         tvStatus.text = when {
             !running -> "Nyalakan EQ Adaptif terlebih dahulu."

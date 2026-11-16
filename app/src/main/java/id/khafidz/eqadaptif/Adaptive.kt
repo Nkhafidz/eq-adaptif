@@ -20,6 +20,14 @@ class Adaptive(val freqs: FloatArray) {
         const val FULL = 200
         const val READY = 40
 
+        /** Daerah yang sering terasa tidak nyaman: nama, frekuensi bawah, frekuensi atas. */
+        val GUARD_REGIONS = listOf(
+            Triple("Bass bengkak", 80f, 250f),
+            Triple("Suara keruh", 250f, 500f),
+            Triple("Cempreng / menusuk", 2000f, 5000f),
+            Triple("Desis tajam (s/ch)", 5000f, 9000f)
+        )
+
         fun normalize(a: FloatArray): FloatArray {
             val m = a.average().toFloat()
             return FloatArray(a.size) { a[it] - m }
@@ -68,6 +76,12 @@ class Adaptive(val freqs: FloatArray) {
             }
         }
     }
+
+    /** Masalah kenyamanan yang terdeteksi pada lagu ini. */
+    class Issue(val name: String, val excessDb: Float)
+
+    var issues: List<Issue> = emptyList()
+        private set
 
     val n = freqs.size
     private val P = DoubleArray(n)
@@ -121,7 +135,11 @@ class Adaptive(val freqs: FloatArray) {
         return x
     }
 
-    fun update(target: FloatArray, strengthPct: Int, limitDb: Int) {
+    /**
+     * guard: Penjaga Kenyamanan aktif (redam daerah yang menusuk/bengkak lebih tegas).
+     * noBoost: suara mendekati pecah, jadi AI tidak boleh menaikkan band mana pun.
+     */
+    fun update(target: FloatArray, strengthPct: Int, limitDb: Int, guard: Boolean = false, noBoost: Boolean = false) {
         if (!ready || target.size != n) return
         val sh = shape()
         val empty = emptyBands()
@@ -137,6 +155,24 @@ class Adaptive(val freqs: FloatArray) {
             val lim = limitDb * edgeLimit(freqs[k])
             d[k] = d[k].coerceIn(-lim, lim)
         }
+        if (guard) {
+            val found = ArrayList<Issue>()
+            for ((name, lo, hi) in GUARD_REGIONS) {
+                val idx = (0 until n).filter { freqs[it] >= lo && freqs[it] < hi && !empty[it] }
+                if (idx.isEmpty()) continue
+                val excess = idx.map { sh[it] - target[it] }.average().toFloat()
+                if (excess > 3f) {
+                    found.add(Issue(name, excess))
+                    for (k in idx) {
+                        // redam penuh sampai batas + 3 dB, tidak terpengaruh "kekuatan koreksi"
+                        val cut = -((sh[k] - target[k]) * 0.9f).coerceIn(0f, limitDb + 3f)
+                        d[k] = minOf(d[k], cut)
+                    }
+                }
+            }
+            issues = found
+        } else issues = emptyList()
+        if (noBoost) for (k in 0 until n) d[k] = minOf(d[k], 0f)
         val rate = if (frames < FULL) 0.25f else 0.08f // cepat menyesuaikan di awal lagu
         for (k in 0 until n) C[k] += (d[k] - C[k]) * rate
     }

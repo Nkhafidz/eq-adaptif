@@ -182,6 +182,7 @@ class EqService : Service() {
             v.setEnabled(false)
             v.setCaptureSize(Visualizer.getCaptureSizeRange()[1].coerceAtMost(2048))
             v.setScalingMode(Visualizer.SCALING_MODE_NORMALIZED)
+            try { v.setMeasurementMode(Visualizer.MEASUREMENT_MODE_PEAK_RMS) } catch (_: Exception) {}
             v.setDataCaptureListener(object : Visualizer.OnDataCaptureListener {
                 override fun onWaveFormDataCapture(vis: Visualizer?, waveform: ByteArray?, samplingRate: Int) {}
                 override fun onFftDataCapture(vis: Visualizer?, fft: ByteArray?, samplingRate: Int) {
@@ -229,6 +230,34 @@ class EqService : Service() {
         AppState.spectrumListener?.invoke()
     }
 
+    // ---------------- Penjaga Kenyamanan: deteksi mendekati pecah ----------------
+
+    private val peaks = ArrayDeque<Int>()   // mB
+    private val rmss = ArrayDeque<Int>()
+    private val meas = Visualizer.MeasurementPeakRms()
+
+    /** 0 aman, 1 waspada, 2 mendekati pecah. Dihitung dari 10 detik terakhir. */
+    private fun measureClip(): Int {
+        val v = viz ?: return 0
+        try {
+            v.getMeasurementPeakRms(meas)
+            if (meas.mRms > -6000) { // hanya saat ada musik
+                peaks.addLast(meas.mPeak); rmss.addLast(meas.mRms)
+                while (peaks.size > 40) { peaks.removeFirst(); rmss.removeFirst() }
+            }
+        } catch (_: Exception) { return 0 }
+        if (peaks.size < 20) return 0
+        val nearMax = peaks.count { it >= -100 }.toFloat() / peaks.size   // puncak >= -1 dBFS
+        val crest = peaks.zip(rmss).map { (p, r) -> (p - r) / 100f }.average().toFloat()
+        AppState.peakDb = peaks.average().toFloat() / 100f
+        AppState.crestDb = crest
+        return when {
+            nearMax >= 0.30f && crest < 10f -> 2
+            nearMax >= 0.10f -> 1
+            else -> 0
+        }
+    }
+
     private fun step() {
         if (viz == null && hasMic()) startVisualizer()
         // ganti detail koreksi (10/15/31 band): analisis & mesin dibuat ulang
@@ -240,10 +269,18 @@ class EqService : Service() {
         if (fx == null) startCorrection()
         fx?.fallbackIfNeeded()
         AppState.engine = fx?.engineName ?: ""
-        adaptive.update(Store.target ?: adaptive.defaultTarget, Store.strength, Store.limit)
+        val clip = if (Store.guardOn) measureClip() else 0
+        AppState.guardLevel = clip
+        adaptive.update(
+            Store.target ?: adaptive.defaultTarget, Store.strength, Store.limit,
+            guard = Store.guardOn, noBoost = Store.guardOn && clip >= 1
+        )
+        AppState.issues = adaptive.issues
         val f = fx
         if (f != null) {
-            f.apply(if (Store.aiOn) adaptive.C else FloatArray(adaptive.n), Store.comp, Store.aiOn)
+            // mendekati pecah: penguat volume dimatikan supaya tidak memperparah
+            val comp = if (Store.guardOn && clip >= 1) 0f else Store.comp
+            f.apply(if (Store.aiOn) adaptive.C else FloatArray(adaptive.n), comp, Store.aiOn)
             AppState.fxActive = f.active
             AppState.error = if (!f.available)
                 "Koreksi AI tidak terpasang: mesin ini sedang dipakai EQ lain. Pilih mesin \"Dasar\" atau \"Otomatis\"." else null

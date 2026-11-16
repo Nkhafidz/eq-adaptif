@@ -47,7 +47,9 @@ object Store {
     /** Detail koreksi: 10, 15, atau 31 band. */
     var bands = 10
     /** Mesin koreksi: 0 otomatis, 1 detail (DynamicsProcessing), 2 dasar (equalizer bawaan HP). */
-    var engine = 0
+    var engine = 2
+    /** Penjaga Kenyamanan: deteksi suara mendekati pecah dan daerah yang menusuk/bengkak. */
+    var guardOn = true
     var strength = 60          // %
     var limit = 6              // dB
     var target: FloatArray? = null
@@ -60,7 +62,8 @@ object Store {
         val p = ctx.applicationContext.getSharedPreferences("eq", Context.MODE_PRIVATE)
         sp = p
         aiOn = p.getBoolean("adaptiveOn", true)
-        engine = p.getInt("aiEngine", 0).coerceIn(0, 2)
+        engine = p.getInt("aiEngine", 2).coerceIn(0, 2)
+        guardOn = p.getBoolean("guardOn", true)
         bands = p.getInt("aiBands", 10).let { if (it == 15 || it == 31) it else 10 }
         strength = p.getInt("strength", 60)
         limit = p.getInt("limit", 6)
@@ -76,6 +79,7 @@ object Store {
             ?.putBoolean("adaptiveOn", aiOn)
             ?.putInt("aiBands", bands)
             ?.putInt("aiEngine", engine)
+            ?.putBoolean("guardOn", guardOn)
             ?.putInt("strength", strength)
             ?.putInt("limit", limit)
             ?.putString("target", target?.joinToString(",") ?: "")
@@ -125,6 +129,10 @@ object AppState {
     var corr = FloatArray(10)       // koreksi AI (dB) per band analisis
     var corrFreqs = Bands.F10       // frekuensi untuk corr
     var engine = ""                 // mesin koreksi yang dipakai
+    var guardLevel = 0              // 0 aman, 1 waspada, 2 mendekati pecah
+    var peakDb = -96f               // puncak rata-rata 10 detik terakhir (dBFS)
+    var crestDb = 0f                // jarak puncak ke rata-rata (dB)
+    var issues: List<Adaptive.Issue> = emptyList()
     var frames = 0                  // jumlah frame analisis lagu saat ini
     var fxActive = false            // efek koreksi sedang memproses suara
     var error: String? = null
